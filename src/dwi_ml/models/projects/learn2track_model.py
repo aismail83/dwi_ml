@@ -445,8 +445,6 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
                                                 x, hidden_recurrent_states)
             bundle_logits_per_line = None
 
-        predicted_bundle_ids = torch.argmax(bundle_logits_per_line, dim=1)
-        print(predicted_bundle_ids)
         logger.debug("*** 5. Direction getter....")
         # direction getter can't get a list of sequences.
         # output will be a tensor, but with same format as input.data.
