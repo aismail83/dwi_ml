@@ -311,17 +311,12 @@ class DWIMLStreamlinesBatchLoader:
             subj_data = self.context_subset.subjs_data_list.get_subj_with_handle(subj)
             subj_sft_data = subj_data.sft_data_list[self.streamline_group_idx]
 
-            # Retrieve bundle IDs before loading streamlines
-            subj_bundle_ids = subj_sft_data.data_per_streamline["bundle_ID"][s_ids]
-            subj_bundle_ids = np.asarray(subj_bundle_ids, dtype=np.int64).reshape(-1)
-
+            
             # Get streamlines as sft
             logger.debug("            Loading sampled streamlines...")
+            s_ids = np.sort(np.asarray(s_ids))
             sft = subj_sft_data.as_sft(s_ids)
-
-            # Attach bundle IDs to the SFT (to keep track during augmentation)
-            sft.data_per_streamline["bundle_ID"] = subj_bundle_ids
-
+            
             # Apply data augmentation (may duplicate or remove streamlines)
             sft = self._data_augmentation_sft(sft)
 

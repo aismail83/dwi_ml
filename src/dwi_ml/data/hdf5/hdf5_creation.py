@@ -782,13 +782,13 @@ class HDF5Creator:
                 # Generate bundle_ID
                 nb_sl = len(sft.streamlines)
                 sft.data_per_streamline["bundle_ID"] = np.full(nb_sl, bundle_id, dtype=np.int16)
+
                 # Add processed tractogram to final big tractogram
                 if final_sft is None:
                     final_sft = sft
                 else:
                     final_sft = concatenate_sft([final_sft, sft], erase_metadata=False)
-                            
-
+                
         if self.save_intermediate:
             output_fname = self.intermediate_folder.joinpath(
                 subj_id + '_' + group + '.trk')

@@ -164,11 +164,10 @@ class _LazyStreamlinesGetter(object):
                     streamlines.append(data, cache_build=True)
 
                     for dps_key in hdf_dps_group.keys():
-                        data_per_streamline[dps_key].append(
-                            hdf_dps_group[dps_key][item])
+                        dps_data = hdf_dps_group[dps_key][[i]]
+                        data_per_streamline[dps_key].append(dps_data)
 
                 streamlines.finalize_append()
-
             elif isinstance(item, slice):
                 offsets = self.hdf_group['offsets'][item]
                 lengths = self.hdf_group['lengths'][item]
