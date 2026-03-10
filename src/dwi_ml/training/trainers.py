@@ -992,7 +992,7 @@ class DWIMLTrainer:
         """
         Computes the loss(es) for the current batch and updates monitors.
         """
-        mean_local_loss, n = self.run_one_batch(targets, ids_per_subj,bundle_ids)
+        mean_local_loss, n = self.run_one_batch(targets, ids_per_subj,batch_bundle_id=bundle_ids)
         self.valid_local_loss_monitor.update(mean_local_loss.cpu().item(),
                                              weight=n)
 
