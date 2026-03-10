@@ -56,7 +56,7 @@ class Learn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
             subj_inputs = self.batch_loader.load_batch_inputs(n_last_pos,
                                                               subj_dict)
 
-            model_outputs, subj_hidden_states = self.model(
+            model_outputs, subj_hidden_states,_ = self.model(
                 subj_inputs, subj_lines,
                 hidden_recurrent_states=subj_hidden_states,
                 return_hidden=True, point_idx=-1)
@@ -69,12 +69,11 @@ class Learn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
         # (using one less point. The next will be done during propagation).
         # Here, subjs_hidden_states will be a list of hidden_states per subj.
         if self.tracking_phase_nb_segments_init > 0:
-            
             tmp_lines = [line[:-1, :] for line in lines]
-            inputs = self.batch_loader.load_batch_inputs(tmp_lines, ids_per_subj)
-
-            model_outputs, whole_hidden_states = self.model(
-                inputs, tmp_lines, return_hidden=True)
+            inputs = self.batch_loader.load_batch_inputs(tmp_lines,
+                                                         ids_per_subj)
+            _, whole_hidden_states,_ = self.model(inputs, tmp_lines,
+                                                return_hidden=True)
 
             subjs_hidden_states = [
                 self.model.take_lines_in_hidden_state(whole_hidden_states,
