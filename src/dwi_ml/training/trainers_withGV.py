@@ -128,7 +128,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
         else:
             return super()._get_latest_loss_to_supervise_best()
 
-    def validate_one_batch(self, targets, ids_per_subj,bundle_ids, epoch=None):
+    def validate_one_batch(self, targets, ids_per_subj,bundle_ids=None, epoch=None):
         # 1. Compute the local loss as usual.
         super().validate_one_batch(targets, ids_per_subj,bundle_ids=bundle_ids, epoch=epoch)
 
@@ -296,7 +296,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
 
             # Supposing the model receives the current input and current
             # position.
-            model_outputs = self.model(subj_inputs, n_last_pos)
+            model_outputs = self.model(subj_inputs, n_last_pos,)
 
             next_dirs = self.model.get_tracking_directions(
                 model_outputs, algo='det', eos_stopping_thresh=0.5)
