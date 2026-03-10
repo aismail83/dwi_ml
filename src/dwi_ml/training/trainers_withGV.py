@@ -130,7 +130,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
 
     def validate_one_batch(self, targets, ids_per_subj,bundle_ids, epoch=None):
         # 1. Compute the local loss as usual.
-        super().validate_one_batch(targets, ids_per_subj,batch_bundle_id=bundle_ids, epoch=epoch)
+        super().validate_one_batch(targets, ids_per_subj,bundle_ids=bundle_ids, epoch=epoch)
 
         logger.debug("--> Max peak during validation (forward, before "
                      "GV phase): ")
