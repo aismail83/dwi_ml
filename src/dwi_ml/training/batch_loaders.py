@@ -324,7 +324,6 @@ class DWIMLStreamlinesBatchLoader:
             subj_bundle_ids = np.asarray(
                 sft.data_per_streamline["bundle_ID"], dtype=np.int64
             ).reshape(-1)
-
             batch_bundle_ids.extend(subj_bundle_ids.tolist())
             
             # Remember the indices of this subject's (augmented) streamlines
@@ -347,7 +346,7 @@ class DWIMLStreamlinesBatchLoader:
             batch_bundle_ids = torch.as_tensor(batch_bundle_ids, dtype=torch.long).view(-1)
         else:
             batch_bundle_ids = None
-
+        
         return batch_streamlines, final_s_ids_per_subj, batch_bundle_ids
         
     def load_batch_connectivity_matrices(
