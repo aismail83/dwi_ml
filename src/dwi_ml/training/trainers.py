@@ -957,7 +957,7 @@ class DWIMLTrainer:
                 # ------ Forward pass + loss -------
                 torch_reset_peaks_memory()
                 with torch.no_grad():
-                    self.validate_one_batch(targets, ids_per_subj, batch_bundle_ids,epoch=epoch)
+                    self.validate_one_batch(targets, ids_per_subj, bundle_ids=batch_bundle_ids,epoch=epoch)
                 log_max_allocated(
                     logger_debug=logger,
                     context="During validation (forward + compute loss)")
@@ -988,7 +988,7 @@ class DWIMLTrainer:
             monitor.end_epoch()
         self._update_comet_after_epoch('validation', epoch)
 
-    def validate_one_batch(self, targets, ids_per_subj,bundle_ids,epoch=None):
+    def validate_one_batch(self, targets, ids_per_subj,bundle_ids=None,epoch=None):
         """
         Computes the loss(es) for the current batch and updates monitors.
         """
@@ -1102,7 +1102,7 @@ class DWIMLTrainer:
         # but ok, shouldn't be too heavy. Easier to deal with multiple
         # projects' requirements by sending whole streamlines rather
         # than only directions.
-        model_outputs = self.model(streamlines_f,batch_bundle_id)
+        model_outputs = self.model(ids_per_subj,streamlines_f,batch_bundle_id)
         del streamlines_f
 
         logger.debug('*** Computing loss')
