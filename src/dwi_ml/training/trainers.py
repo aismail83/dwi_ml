@@ -957,7 +957,7 @@ class DWIMLTrainer:
                 # ------ Forward pass + loss -------
                 torch_reset_peaks_memory()
                 with torch.no_grad():
-                    self.validate_one_batch(targets, ids_per_subj, batch_bundle_ids)
+                    self.validate_one_batch(targets, ids_per_subj, batch_bundle_ids,epoch)
                 log_max_allocated(
                     logger_debug=logger,
                     context="During validation (forward + compute loss)")
@@ -988,7 +988,7 @@ class DWIMLTrainer:
             monitor.end_epoch()
         self._update_comet_after_epoch('validation', epoch)
 
-    def validate_one_batch(self, targets, ids_per_subj,bundle_ids):
+    def validate_one_batch(self, targets, ids_per_subj,bundle_ids,epoch):
         """
         Computes the loss(es) for the current batch and updates monitors.
         """
