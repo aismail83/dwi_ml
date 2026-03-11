@@ -210,20 +210,30 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
         compares with expected values for the subject.
         """
         if self.compute_connectivity:
+            if lines is None or len(lines) == 0:
+                score = 0.0
+                return score
+
             # toDo. See if it's too much to keep them all in memory. Could be
             #  done in the loop for each subject.
             (connectivity_matrices, volume_sizes,
-             connectivity_nb_blocs, connectivity_labels) = \
+            connectivity_nb_blocs, connectivity_labels) = \
                 self.batch_loader.load_batch_connectivity_matrices(
                     ids_per_subj)
 
             score = 0.0
+            n_lines = 0
             for i, subj in enumerate(ids_per_subj.keys()):
                 real_matrix = connectivity_matrices[i]
                 volume_size = volume_sizes[i]
                 nb_blocs = connectivity_nb_blocs[i]
                 labels = connectivity_labels[i]
                 _lines = lines[ids_per_subj[subj]]
+
+                if _lines is None or len(_lines) == 0:
+                    continue
+
+                n_lines += len(_lines)
 
                 # Move to cpu, numpy now.
                 _lines = [line.cpu().numpy() for line in _lines]
@@ -249,7 +259,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
                         "labels) for the connectivity matrix as what used to "
                         "compute the reference connectivity matrices in the "
                         "hdf5 (nb rows: {})."
-                        .format(batch_matrix[0].shape, real_matrix.shape[0]))
+                        .format(batch_matrix.shape[0], real_matrix.shape[0]))
 
                 # Where our batch has a 0: not important, maybe it was simply
                 # not in this batch.
@@ -263,7 +273,10 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
                                 (1.0 - real_matrix[where_one]))
 
             # Average for batch
-            score = score / len(lines)
+            if n_lines == 0:
+                score = 0.0
+            else:
+                score = score / n_lines
         else:
             score = None
         return score
