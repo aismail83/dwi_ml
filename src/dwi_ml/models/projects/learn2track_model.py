@@ -340,7 +340,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         dev = next(self.parameters()).device
 
         if self.use_bundle_ids:
-            if self.context == 'tracking':
+            if self.context == 'tracking'or bundle_ids is None:
                 bundle_ids = torch.zeros(len(x), device=dev, dtype=torch.long)
             else:
                 bundle_ids = torch.as_tensor(bundle_ids, device=dev, dtype=torch.long).view(-1)
