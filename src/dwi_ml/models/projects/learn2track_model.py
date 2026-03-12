@@ -255,6 +255,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
             'use_bundle_ids': self.use_bundle_ids,
             'bundle_emb_dim': self.bundle_emb_dim,
             'num_bundles': self.num_bundles,
+            'predict_bundle_ids':self.predict_bundle_ids
 
         })
 
