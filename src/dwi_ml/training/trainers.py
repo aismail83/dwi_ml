@@ -56,8 +56,8 @@ class DWIMLTrainer:
                  learning_rates: Union[List, float] = None,
                  weight_decay: float = 0.01,
                  optimizer: str = 'Adam', max_epochs: int = 10,
-                 max_batches_per_epoch_training: int = 1000,
-                 max_batches_per_epoch_validation: Union[int, None] = 1000,
+                 max_batches_per_epoch_training: int = 10,
+                 max_batches_per_epoch_validation: Union[int, None] = 10,
                  patience: int = None, patience_delta: float = 1e-6,
                  nb_cpu_processes: int = 0, use_gpu: bool = False,
                  clip_grad: float = None,
@@ -1105,7 +1105,7 @@ class DWIMLTrainer:
         # but ok, shouldn't be too heavy. Easier to deal with multiple
         # projects' requirements by sending whole streamlines rather
         # than only directions.
-        model_outputs = self.model(ids_per_subj,streamlines_f,bundle_ids)
+        model_outputs,_,_ = self.model(ids_per_subj,streamlines_f,bundle_ids)
         del streamlines_f
 
         logger.debug('*** Computing loss')
@@ -1250,7 +1250,7 @@ class DWIMLTrainerOneInput(DWIMLTrainer):
             bundle_ids = bundle_ids.to(
                 self.device, non_blocking=True, dtype=torch.long)
         
-        model_outputs,bl_per_line= self.model(batch_inputs, bundle_ids=bundle_ids,
+        model_outputs,_,bl_per_line= self.model(batch_inputs, bundle_ids=bundle_ids,
                                    input_streamlines=streamlines_f)
         del streamlines_f
 

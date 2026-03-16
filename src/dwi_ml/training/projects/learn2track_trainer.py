@@ -63,6 +63,8 @@ class Learn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
 
             next_dirs = self.model.get_tracking_directions(
                 model_outputs, algo='det', eos_stopping_thresh=0.5)
+            
+            
             return next_dirs
 
         # Running the beginning of the streamlines to get the hidden states

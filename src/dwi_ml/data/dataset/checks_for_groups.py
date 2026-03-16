@@ -46,6 +46,7 @@ def _find_groups_info_for_subj(hdf_file, subj_id: str):
         elif group_type == 'streamlines':
             streamline_groups.append(hdf_group)
             found_matrix = 'connectivity_matrix' in hdf_file[subj_id][hdf_group]
+            print("------", found_matrix)
             contains_connectivity.append(found_matrix)
         else:
             raise NotImplementedError(

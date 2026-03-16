@@ -340,7 +340,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         dev = next(self.parameters()).device
 
         if self.use_bundle_ids:
-            if self.context == 'tracking'or bundle_ids is None:
+            if self.context == 'tracking' or bundle_ids is None:
                 bundle_ids = torch.zeros(len(x), device=dev, dtype=torch.long)
             else:
                 bundle_ids = torch.as_tensor(bundle_ids, device=dev, dtype=torch.long).view(-1)
@@ -371,13 +371,12 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
             # Formatting the n previous dirs for last point or all
 
             # ==== 1. Previous dirs embedding ====
-            if self.nb_previous_dirs > 0:
-                n_prev_dirs = compute_n_previous_dirs(
-                    dirs, self.nb_previous_dirs, point_idx=point_idx)
-                n_prev_dirs = pack_sequence(n_prev_dirs)
-                # Shape: (nb_points - 1) per streamline x (3 per prev dir)
-                n_prev_dirs = self.prev_dirs_embedding(n_prev_dirs.data)
-                n_prev_dirs = self.embedding_dropout(n_prev_dirs)
+            n_prev_dirs = compute_n_previous_dirs(
+                dirs, self.nb_previous_dirs, point_idx=point_idx)
+            n_prev_dirs = pack_sequence(n_prev_dirs)
+            # Shape: (nb_points - 1) per streamline x (3 per prev dir)
+            n_prev_dirs = self.prev_dirs_embedding(n_prev_dirs.data)
+            n_prev_dirs = self.embedding_dropout(n_prev_dirs)
 
         # ==== 2. Inputs embedding ====
         # If bundle conditioning is enabled, compute bundle embeddings.
@@ -489,11 +488,10 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
                     out_hidden_recurrent_states = [
                         layer_states[:, unsorted_indices, :] for
                         layer_states in out_hidden_recurrent_states]
-              
-            return x, out_hidden_recurrent_states,bundle_logits_per_line
         else:
-            
-            return x,bundle_logits_per_line
+            out_hidden_recurrent_states=None
+
+        return x, out_hidden_recurrent_states,bundle_logits_per_line
 
     def copy_prev_dir(self, dirs):
         if 'regression' in self.dg_key:

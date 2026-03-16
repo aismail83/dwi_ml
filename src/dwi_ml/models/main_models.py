@@ -487,8 +487,7 @@ class ModelWithOneInput(MainModelAbstract):
             help='In the case of CNN embedding, size of the 3D filter matrix '
                  '(kernel). Will be of shape kxkxk. See also '
                  '--nb_cnn_filters.')
-
-
+        
 class ModelWithDirectionGetter(MainModelAbstract):
     """
     Adding typical options for models intended for learning to track.

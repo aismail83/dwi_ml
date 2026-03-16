@@ -96,15 +96,19 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
             'tracking_mean_final_distance_monitor', weighted=True)
 
         # Connectivity matrix accordance
-        self.tracking_connectivity_score_monitor = BatchHistoryMonitor(
-            'tracking_connectivity_score_monitor', weighted=True)
+        self.tracking_connectivity_score_monitor = None
+        if self.compute_connectivity:
+            self.tracking_connectivity_score_monitor = BatchHistoryMonitor(
+                'tracking_connectivity_score_monitor', weighted=True)
 
         if self.add_a_tracking_validation_phase:
-            new_monitors = [self.tracking_mean_final_distance_monitor,
-                            self.tracking_connectivity_score_monitor]
+            new_monitors = [self.tracking_mean_final_distance_monitor]
+
+            if self.tracking_connectivity_score_monitor is not None:
+                new_monitors.append(self.tracking_connectivity_score_monitor)
+
             self.monitors += new_monitors
             self.validation_monitors += new_monitors
-
     @property
     def params_for_checkpoint(self):
         p = super().params_for_checkpoint
@@ -128,44 +132,54 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
         else:
             return super()._get_latest_loss_to_supervise_best()
 
-    def validate_one_batch(self, targets, ids_per_subj,bundle_ids=None, epoch=None):
+    def validate_one_batch(self, targets, ids_per_subj, bundle_ids=None, epoch=None):
         # 1. Compute the local loss as usual.
-        super().validate_one_batch(targets, ids_per_subj,bundle_ids=bundle_ids, epoch=epoch)
+        super().validate_one_batch(targets, ids_per_subj,
+                                bundle_ids=bundle_ids, epoch=epoch)
 
         logger.debug("--> Max peak during validation (forward, before "
-                     "GV phase): ")
+                    "GV phase): ")
         logger.debug(torch.cuda.max_memory_allocated() / BYTES_IN_GB)
 
         # 2. Compute generation losses.
         if self.add_a_tracking_validation_phase:
             if (epoch + 1) % self.tracking_phase_frequency == 0:
                 logger.debug("Additional tracking-like generation validation "
-                             "from batch.")
+                            "from batch.")
+                
                 (gen_n, mean_final_dist, connectivity) = \
                     self.gv_phase_one_batch(targets, ids_per_subj)
-
+                
                 self.tracking_mean_final_distance_monitor.update(
                     mean_final_dist, weight=gen_n)
-
-                if self.compute_connectivity:
+                
+                if self.compute_connectivity and \
+                self.tracking_connectivity_score_monitor is not None:
                     self.tracking_connectivity_score_monitor.update(
                         connectivity, weight=gen_n)
             elif len(self.tracking_mean_final_distance_monitor.average_per_epoch) == 0:
                 logger.info("Skipping tracking-like generation validation "
                             "from batch. No values yet: adding fake initial "
                             "values.")
+
                 # Fake values at the beginning
                 # Bad mean dist = very far. ex, 100, or clipped.
                 self.tracking_mean_final_distance_monitor.update(100.0)
-
-                if self.compute_connectivity:
-                    self.tracking_connectivity_score_monitor.update(1)
+                if self.compute_connectivity and \
+                self.tracking_connectivity_score_monitor is not None:
+                    self.tracking_connectivity_score_monitor.update(1.0)
             else:
                 logger.info("Skipping tracking-like generation validation "
                             "from batch. Copying previous epoch's values.")
+
                 # Copy previous value
-                for monitor in [self.tracking_mean_final_distance_monitor,
-                                self.tracking_connectivity_score_monitor]:
+                monitors = [self.tracking_mean_final_distance_monitor]
+
+                # Add connectivity monitor only if it exists
+                if self.compute_connectivity and \
+                self.tracking_connectivity_score_monitor is not None:
+                    monitors.append(self.tracking_connectivity_score_monitor)
+                for monitor in monitors:
                     monitor.update(monitor.average_per_epoch[-1])
 
     def gv_phase_one_batch(self, targets, ids_per_subj):
@@ -177,32 +191,36 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
         # Possibly sending again to GPU even if done in the local loss
         # computation, but easier with current implementation.
         targets = [line.to(self.device, non_blocking=True,
-                              dtype=torch.float)
-                      for line in targets]
+                            dtype=torch.float)
+                    for line in targets]
         last_pos = torch.vstack([line[-1, :] for line in targets])
 
         # Starting from the n first segments.
         # Ex: 1 segment = seed + 1 point = 2 points = s[0:2]
         lines = [s[0:min(len(s), self.tracking_phase_nb_segments_init + 1), :]
-                 for s in targets]
+                for s in targets]
 
         # Propagation: no backward tracking.
         previous_context = self.model.context
         self.model.set_context('tracking')
-        lines = self.propagate_multiple_lines(lines, ids_per_subj)
-        self.model.set_context(previous_context)
+        try:
+            lines = self.propagate_multiple_lines(lines, ids_per_subj)
+        finally:
+            self.model.set_context(previous_context)
 
         # 1. Final distance compared to expected point.
-        computed_last_pos = torch.vstack([line[-1, :] for line in lines])
-        l2_loss = PairwiseDistance(p=2)
-        final_dist = l2_loss(computed_last_pos, last_pos)
-        final_dist = torch.mean(final_dist)
-        final_dist = final_dist.item()
+        if lines is None or len(lines) == 0:
+            final_dist = 0.0
+        else:
+            computed_last_pos = torch.vstack([line[-1, :] for line in lines])
+            l2_loss = PairwiseDistance(p=2)
+            final_dist = l2_loss(computed_last_pos, last_pos)
+            final_dist = torch.mean(final_dist)
+            final_dist = final_dist.item()
 
         # 2. Connectivity scores, if available (else None)
         connectivity_score = self._compare_connectivity(lines, ids_per_subj)
-
-        return len(lines), final_dist, connectivity_score
+        return len(lines) if lines is not None else 0, final_dist, connectivity_score
 
     def _compare_connectivity(self, lines, ids_per_subj):
         """
@@ -249,7 +267,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
                 else:
                     # Note: scilpy usage not ready! Simple endpoints position
                     # Note: uses streamlines in vox space, corner origin
-                    batch_matrix, _, _, _ =\
+                    batch_matrix, _, _, _ = \
                         compute_triu_connectivity_from_labels(
                             _lines, labels, use_scilpy=False)
 
@@ -261,6 +279,14 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
                         "hdf5 (nb rows: {})."
                         .format(batch_matrix.shape[0], real_matrix.shape[0]))
 
+                if not np.isfinite(batch_matrix).all():
+                    raise ValueError(
+                        "batch_matrix contains non-finite values "
+                        "(nan: {}, inf: {})".format(
+                            np.isnan(batch_matrix).sum(),
+                            np.isinf(batch_matrix).sum())
+                    )
+
                 # Where our batch has a 0: not important, maybe it was simply
                 # not in this batch.
                 # Where our batch has a 1, if there was really a one: score
@@ -269,16 +295,23 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
                 # If two streamlines have the same connection, score is
                 # either 0 or 2 for that voxel.  ==> nb * (1 - real).
                 where_one = np.where(batch_matrix > 0)
-                score += np.sum(batch_matrix[where_one] *
-                                (1.0 - real_matrix[where_one]))
+                partial_score = np.sum(batch_matrix[where_one] *
+                                    (1.0 - real_matrix[where_one]))
+
+                if not np.isfinite(partial_score):
+                    raise ValueError("Connectivity partial score is not finite.")
+
+                score += partial_score
 
             # Average for batch
             if n_lines == 0:
                 score = 0.0
             else:
                 score = score / n_lines
+
+            score = float(score)
         else:
-            score = None
+            score = 0.0
         return score
 
     def propagate_multiple_lines(self, lines: List[torch.Tensor],
@@ -309,7 +342,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
 
             # Supposing the model receives the current input and current
             # position.
-            model_outputs = self.model(subj_inputs, n_last_pos,)
+            model_outputs,_,_ = self.model(subj_inputs, n_last_pos,)
 
             next_dirs = self.model.get_tracking_directions(
                 model_outputs, algo='det', eos_stopping_thresh=0.5)
@@ -339,5 +372,5 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
                 verify_opposite_direction=False,
                 mask=tracking_mask, max_nbr_pts=max_nbr_pts,
                 append_last_point=False, normalize_directions=True))
-
+        print(final_lines)
         return final_lines
