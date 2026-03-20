@@ -28,6 +28,7 @@ class RecurrentTracker(DWIMLTrackerOneInput):
         # - previous_dirs, already dealt with by super.
         # - For RNN: new parameter: The hidden states of the RNN
         self.hidden_recurrent_states = None
+        self.bundle_logits = []
 
     def prepare_forward(self, seeding_pos):
         """
@@ -76,6 +77,7 @@ class RecurrentTracker(DWIMLTrackerOneInput):
             model_outputs, self.hidden_recurrent_states,_ = self.model(
                 inputs, lines, self.hidden_recurrent_states,
                 return_hidden=True, point_idx=-1)
+                
 
         return model_outputs
 

@@ -30,7 +30,7 @@ def add_tracking_options(p: ArgumentParser):
                    help='Tractogram output file (must be .trk or .tck).')
     p.add_argument('seeding_mask_group',
                    help="Seeding mask's volume group in the hdf5.")
-
+    
     track_g = p.add_argument_group('Tracking options')
     track_g.add_argument('--algo', choices=['det', 'prob'], default='det',
                          help="Tracking algorithm (det or prob). Must be "
@@ -94,6 +94,7 @@ def add_tracking_options(p: ArgumentParser):
              "with a fixed --rng_seed. Ex: If \ntractogram_1 was created "
              "with -nt 1,000,000, you can create tractogram_2 with \n"
              "--skip 1,000,000.")
+    
 
     # Memory options:
     m_g = add_memory_args(p, add_lazy_options=True,

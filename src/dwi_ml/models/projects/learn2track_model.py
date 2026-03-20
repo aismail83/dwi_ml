@@ -170,7 +170,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         # ---- Bundle ID options
         self.use_bundle_ids = bool(use_bundle_ids)
         self.predict_bundle_ids=predict_bundle_ids
-
+        self.num_bundles = int(num_bundles)
         if self.use_bundle_ids:
             if bundle_emb_dim is None:
                 raise ValueError("bundle_emb_dim must be provided when use_bundle_ids=True")
@@ -179,7 +179,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
 
             # Force python ints (fixes numpy scalar / tensor types)
             self.bundle_emb_dim = int(bundle_emb_dim)
-            self.num_bundles = int(num_bundles)
+            
 
             if self.bundle_emb_dim <= 0:
                 raise ValueError(f"bundle_emb_dim must be > 0 (got {self.bundle_emb_dim})")
@@ -188,7 +188,6 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
 
             self.bundle_emb = torch.nn.Embedding(self.num_bundles, self.bundle_emb_dim)
         else:
-            self.num_bundles = 0
             self.bundle_emb_dim = 0
             self.bundle_emb = None
 
