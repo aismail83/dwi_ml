@@ -6,10 +6,12 @@ import shutil
 from argparse import ArgumentParser
 import torch.nn.functional as F
 import torch
+import h5py
+
 
 from dwi_ml.experiment_utils.prints import format_dict_to_str
 from dwi_ml.io_utils import add_resample_or_compress_arg
-
+from dwi_ml.data.dataset.multi_subject_containers import MultisubjectSubset
 logger = logging.getLogger('model_logger')
 
 
@@ -35,10 +37,12 @@ class MainModelAbstract(torch.nn.Module):
     - Adds some internal values for easier management, such as self.device and
       self.context.
     """
-
+    subset: MultisubjectSubset
     def __init__(self, experiment_name: str,
                  # Target preprocessing params for the BatchLoader + tracker
+                subset: MultisubjectSubset=None,
                  step_size: float = None,
+                
                  nb_points: int = None,
                  compress_lines: float = False,
                  # Other
@@ -61,9 +65,12 @@ class MainModelAbstract(torch.nn.Module):
             Level of the model logger. Default: root's level.
         """
         super().__init__()
-
+        
+        self.subset= subset
         self.experiment_name = experiment_name
+        self.bundle_class_weights = None
 
+        
         # Trainer's logging level can be changed separately from main
         # scripts.
         logger.setLevel(log_level)
@@ -221,34 +228,70 @@ class MainModelAbstract(torch.nn.Module):
         raise NotImplementedError
     
 
+
+
+    def compute_bundles_class_weights(self, subset, num_classes=21):
+        """
+        Compute dataset-level class weights from all bundle IDs in the subset.
+        """
+        if subset is None:
+            raise ValueError("subset is None. Pass dataset.training_set.")
+        all_train_bundle_ids = []
+
+        with h5py.File(subset.hdf5_file, "r") as f:
+            for subj_id in f.keys():  # 🔥 plus sûr que subset.subjects
+                subj_group = f[subj_id]
+
+                for group_name in subset.streamline_groups:
+                    if group_name not in subj_group:
+                        continue
+
+                    streamlines_group = subj_group[group_name]
+
+                    if "data_per_streamline" not in streamlines_group:
+                        continue
+                    if "bundle_ID" not in streamlines_group["data_per_streamline"]:
+                        continue
+
+                    bundle_ids = streamlines_group["data_per_streamline"]["bundle_ID"][:]
+                    bundle_ids = torch.as_tensor(bundle_ids, dtype=torch.long).view(-1)
+                    all_train_bundle_ids.append(bundle_ids)
+
+        if len(all_train_bundle_ids) == 0:
+            raise RuntimeError("No bundle_ID found in the subset.")
+
+        all_train_bundle_ids = torch.cat(all_train_bundle_ids, dim=0)
+
+        class_counts = torch.bincount(all_train_bundle_ids, minlength=num_classes).float()
+
+        class_weights = torch.zeros_like(class_counts)
+        nonzero = class_counts > 0
+        class_weights[nonzero] = 1.0 / class_counts[nonzero]
+
+        if nonzero.any():
+            class_weights[nonzero] = (
+                class_weights[nonzero] / class_weights[nonzero].sum() * nonzero.sum()
+            )
+
+        return class_weights
+    
+
+
     def compute_bundle_loss(self, bundle_logits=None, bundle_ids=None) -> torch.Tensor:
         """
-        Compute bundle classification loss.
-
-        Parameters
-        ----------
-        bundle_logits : Tensor
-            Predicted logits per streamline.
-            Shape: [N_lines, num_bundles]
-
-        bundle_ids : Tensor
-            Ground truth bundle IDs.
-            Shape: [N_lines]
-
-        Returns
-        -------
-        loss_bundle : Tensor
-            Cross entropy loss for bundle prediction.
+        Compute the bundle classification loss.
         """
-        if bundle_logits is not None and bundle_ids is not None:
-            # Put at same device
-            bundle_ids = bundle_ids.to(bundle_logits.device).long()
+        if bundle_logits is None or bundle_ids is None:
+            if bundle_logits is not None:
+                return bundle_logits.new_zeros(())
+            device = self.device if hasattr(self, "device") else "cpu"
+            return torch.tensor(0.0, device=device)
 
-            # Cross entropy classification loss
-            loss_bundle = F.cross_entropy(bundle_logits, bundle_ids)
-            
-        else:
-            loss_bundle=0
+        bundle_ids = bundle_ids.to(bundle_logits.device).long()
 
-        return loss_bundle
-    
+        weight = None
+        if self.bundle_class_weights is not None:
+            weight = self.bundle_class_weights.to(bundle_logits.device)
+        criterion_bundle = torch.nn.CrossEntropyLoss(weight=weight)
+
+        return criterion_bundle(bundle_logits, bundle_ids)

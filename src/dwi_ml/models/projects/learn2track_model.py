@@ -372,7 +372,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
             # ==== 1. Previous dirs embedding ====
             n_prev_dirs = compute_n_previous_dirs(
                 dirs, self.nb_previous_dirs, point_idx=point_idx)
-            n_prev_dirs = pack_sequence(n_prev_dirs)
+            n_prev_dirs = pack_sequence(n_prev_dirs, enforce_sorted=False)
             # Shape: (nb_points - 1) per streamline x (3 per prev dir)
             n_prev_dirs = self.prev_dirs_embedding(n_prev_dirs.data)
             n_prev_dirs = self.embedding_dropout(n_prev_dirs)
@@ -386,7 +386,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
             b_list = [b[i].expand(x[i].shape[0], -1) for i in range(len(x))]  # [Li, emb_dim]
 
         
-        x= pack_sequence(x)
+        x = pack_sequence(x, enforce_sorted=False)
         batch_sizes = x.batch_sizes
         
 
@@ -417,7 +417,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         # pack du bundle embedding avec le même ordre/longueurs
         if self.use_bundle_ids and bundle_ids is not None:
             x = x.data
-            b_packed = pack_sequence(b_list)
+            b_packed = pack_sequence(b_list, enforce_sorted=False)
             x = torch.cat((x, b_packed.data), dim=-1)
 
             # Shaping again as packed sequence.
@@ -438,12 +438,26 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
             bl_list = faster_unpack_sequence(bl)  # list[Li, num_bundles]
             if unsorted_indices is not None:
                 bl_list = [bl_list[i] for i in unsorted_indices]
-            bundle_logits_per_line = torch.vstack([t[-1] for t in bl_list])  # [N_lines, num_bundles]
+            bundle_logits_per_line = torch.vstack([
+                    t[-1] for t in bl_list
+                ])
         else:
             x, out_hidden_recurrent_states= self.rnn_model(
                                                 x, hidden_recurrent_states)
             bundle_logits_per_line = None
+        """
+        if bundle_ids is not None:
+            batch_pred = torch.argmax(bundle_logits_per_line, dim=1)
+            
+            bundle_ids = torch.as_tensor(bundle_ids, device=batch_pred.device).view(-1)
 
+            acc = (batch_pred == bundle_ids).float().mean()
+
+            print("bundle_acc:", acc.item())
+        """
+        #batch_pred = torch.argmax(bundle_logits_per_line, dim=1)
+        #print(bundle_logits_per_line[:5])
+        #print(batch_pred)
         logger.debug("*** 5. Direction getter....")
         # direction getter can't get a list of sequences.
         # output will be a tensor, but with same format as input.data.
@@ -491,7 +505,6 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
             out_hidden_recurrent_states=None
 
         return x, out_hidden_recurrent_states,bundle_logits_per_line
-
     def copy_prev_dir(self, dirs):
         if 'regression' in self.dg_key:
             # Regression: The latest previous dir will be used as skip

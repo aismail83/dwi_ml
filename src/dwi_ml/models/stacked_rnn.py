@@ -260,4 +260,5 @@ class StackedRNN(torch.nn.Module):
             return last_output, out_hidden_states
         else:
             bundle_logits = self.bundle_head(last_output)
+           
             return last_output, out_hidden_states, bundle_logits

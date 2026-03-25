@@ -342,7 +342,7 @@ class DWIMLStreamlinesBatchLoader:
         batch_streamlines = [torch.as_tensor(s) for s in batch_streamlines]
 
         # Convert bundle IDs if used
-        if self.use_bundle_ids and batch_bundle_ids is not None:
+        if batch_bundle_ids is not None:
             batch_bundle_ids = torch.as_tensor(batch_bundle_ids, dtype=torch.long).view(-1)
         else:
             batch_bundle_ids = None

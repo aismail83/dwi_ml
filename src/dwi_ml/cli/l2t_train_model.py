@@ -70,10 +70,12 @@ def init_from_args(args, sub_loggers_level):
                                           log_level=sub_loggers_level)
     # Preparing the batch
     modelAbstract=MainModelAbstract(experiment_name=args.experiment_name, 
+                                    subset=dataset.training_set,
                              step_size=args.step_size, 
                              compress_lines=args.compress_th,)
     group_loader= prepare_batch_loader(dataset, modelAbstract, args, sub_loggers_level)
-
+   
+    
     # Preparing the model
     # (Direction getter)
     dg_args = check_args_direction_getter(args)
@@ -121,6 +123,9 @@ def init_from_args(args, sub_loggers_level):
                      format_dict_to_str(model.computed_params_for_display))
 
     # Preparing the batch samplers
+    model.bundle_class_weights = model.compute_bundles_class_weights(
+        dataset.training_set, num_classes=21
+    )
     batch_sampler = prepare_batch_sampler(dataset, args, sub_loggers_level)
     batch_loader = prepare_batch_loader(dataset, model, args, sub_loggers_level)
 

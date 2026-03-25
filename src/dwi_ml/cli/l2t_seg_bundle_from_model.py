@@ -139,7 +139,7 @@ def predict_bundles_for_streamlines(
         Predicted bundle IDs, shape [nb_streamlines].
     """
     model.eval()
-    model.set_context("visu")
+    model.set_context("tracking")
 
     device = next(model.parameters()).device
     pred_ids = []
@@ -163,7 +163,7 @@ def predict_bundles_for_streamlines(
                 subj_idx,
                 volume_group_idx
             )
-
+            
             _, _, bundle_logits = model(
                 inputs,
                 input_streamlines=batch_lines,
@@ -181,6 +181,8 @@ def predict_bundles_for_streamlines(
         pred_ids.extend(batch_pred.detach().cpu().numpy().tolist())
 
     return np.asarray(pred_ids, dtype=np.int64)
+
+
 def save_streamlines_by_bundle(streamlines, pred_bundle_ids, ref, args, seeds=None):
     """
     Save one tractogram file per predicted bundle.
@@ -285,16 +287,18 @@ def main():
 
     # Load existing tractogram
     sft = load_tractogram(args.out_tractogram, 'same')
+    sft.to_vox()
+    sft.to_corner()
     streamlines = list(sft.streamlines)
     subj_idx = 0
     volume_group_idx = dataset.volume_groups.index(args.input_group)
     print("Loaded tractogram:", len(streamlines), "streamlines")
-
+   
     # Predict bundles
     logging.debug("Instantiating pred_bundle_ids.")
     pred_bundle_ids = predict_bundles_for_streamlines(streamlines, model,dataset, subj_idx,volume_group_idx
     , batch_size=256)
-
+    
     # Save bundles
     save_streamlines_by_bundle(streamlines, pred_bundle_ids, ref, args )
 if __name__ == "__main__":

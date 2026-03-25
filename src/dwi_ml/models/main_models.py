@@ -54,7 +54,7 @@ class ModelWithNeighborhood(MainModelAbstract):
         self.neighborhood_resolution = neighborhood_resolution
         self.neighborhood_vectors = prepare_neighborhood_vectors(
             neighborhood_type, neighborhood_radius, neighborhood_resolution)
-
+        
         # Reminder. nb neighbors does not include origin.
         self.nb_neighbors = len(self.neighborhood_vectors) if \
             self.neighborhood_vectors is not None else 1
@@ -572,7 +572,7 @@ class ModelWithDirectionGetter(MainModelAbstract):
         """
         Compute total loss: direction loss + bundle classification loss.
         """
-
+        
         # Compute direction prediction loss
         loss_dir,n = self.direction_getter.compute_loss(
             model_outputs, target_streamlines,
@@ -580,8 +580,8 @@ class ModelWithDirectionGetter(MainModelAbstract):
 
         # Compute bundle classification loss
         loss_bundle= self.compute_bundle_loss(bundle_logits=bundle_logits, bundle_ids=bundle_ids)
-
-        # Combine the two losses
+        
+                # Combine the two losses
         return loss_dir + lambda_bundle * loss_bundle,n
     
     def move_to(self, device):
@@ -611,3 +611,5 @@ class ModelWithDirectionGetter(MainModelAbstract):
                 # all_outputs = a list of tensors per streamline.
                 all_outputs.extend(new_batch)
             return all_outputs
+        
+    
