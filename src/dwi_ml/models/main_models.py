@@ -567,7 +567,7 @@ class ModelWithDirectionGetter(MainModelAbstract):
     def compute_loss(self, model_outputs: List[Tensor], target_streamlines,
                  bundle_logits: torch.Tensor,
                  bundle_ids: torch.Tensor,
-                 lambda_bundle=0.5,
+                 lambda_bundle=0.1,
                     average_results=True, return_eos_probs=False):
         """
         Compute total loss: direction loss + bundle classification loss.
