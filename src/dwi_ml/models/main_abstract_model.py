@@ -224,7 +224,7 @@ class MainModelAbstract(torch.nn.Module):
     def forward(self, inputs, streamlines):
         raise NotImplementedError
 
-    def compute_loss(self, model_outputs, target_streamlines):
+    def compute_loss(self, model_outputs,target_streamlines,bundle_logits=None, bundle_ids=None,average_results=True):
         raise NotImplementedError
     
 
@@ -284,6 +284,8 @@ class MainModelAbstract(torch.nn.Module):
         if bundle_logits is None or bundle_ids is None:
             if bundle_logits is not None:
                 return bundle_logits.new_zeros(())
+            elif bundle_logits is None:
+                return 0
             device = self.device if hasattr(self, "device") else "cpu"
             return torch.tensor(0.0, device=device)
 
