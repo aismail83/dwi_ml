@@ -1263,5 +1263,5 @@ class DWIMLTrainerOneInput(DWIMLTrainer):
         mean_loss, n = self.model.compute_loss(model_outputs, targets,bundle_logits=bl_per_line,
                                                 bundle_ids=bundle_ids,
                                                average_results=True)
-
+        print(mean_loss)
         return mean_loss, n

@@ -580,7 +580,10 @@ class ModelWithDirectionGetter(MainModelAbstract):
 
         # Compute bundle classification loss
         loss_bundle= self.compute_bundle_loss(bundle_logits=bundle_logits, bundle_ids=bundle_ids)
-        
+        print(loss_dir)
+        print(loss_dir + lambda_bundle * loss_bundle)
+        #print(loss_bundle)
+
                 # Combine the two losses
         return loss_dir + lambda_bundle * loss_bundle,n
     
