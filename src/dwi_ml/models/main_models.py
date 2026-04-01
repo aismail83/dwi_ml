@@ -564,26 +564,45 @@ class ModelWithDirectionGetter(MainModelAbstract):
             model_outputs, algo, eos_stopping_thresh)
         return dirs
     
-    def compute_loss(self, model_outputs: List[Tensor], target_streamlines,
-                 bundle_logits: torch.Tensor,
-                 bundle_ids: torch.Tensor,
-                 lambda_bundle=0.1,
-                    average_results=True, return_eos_probs=False):
-        """
-        Compute total loss: direction loss + bundle classification loss.
-        """
-        
-        # Compute direction prediction loss
-        loss_dir,n = self.direction_getter.compute_loss(
-            model_outputs, target_streamlines,
-            average_results, return_eos_probs)
-
-        # Compute bundle classification loss
-        loss_bundle= self.compute_bundle_loss(bundle_logits=bundle_logits, bundle_ids=bundle_ids)
-
-                # Combine the two losses
-        return loss_dir + lambda_bundle * loss_bundle,n
     
+    def compute_loss(
+        self,
+        model_outputs: List[Tensor],
+        target_streamlines,
+        bundle_logits: torch.Tensor | None = None,
+        bundle_ids: torch.Tensor | None = None,
+        lambda_bundle: float = 0.1,
+        average_results: bool = True,
+        return_eos_probs: bool = False,
+    ):
+        """
+        Compute total loss.
+
+        If bundle_logits and bundle_ids are provided:
+            total_loss = direction_loss + lambda_bundle * bundle_loss
+        Otherwise:
+            total_loss = direction_loss
+        """
+
+        # Direction prediction loss
+        loss_dir, n = self.direction_getter.compute_loss(
+            model_outputs,
+            target_streamlines,
+            average_results,
+            return_eos_probs,
+        )
+
+        total_loss = loss_dir
+
+        # Optional bundle classification loss
+        if bundle_logits is not None and bundle_ids is not None:
+            loss_bundle = self.compute_bundle_loss(
+                bundle_logits=bundle_logits,
+                bundle_ids=bundle_ids,
+            )
+            total_loss = total_loss + lambda_bundle * loss_bundle
+
+        return total_loss, n
     def move_to(self, device):
         super().move_to(device)
         self.direction_getter.move_to(device)
