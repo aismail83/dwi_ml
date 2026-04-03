@@ -208,7 +208,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
 
         # 2. Connectivity scores, if available (else None)
         connectivity_score = self._compare_connectivity(lines, ids_per_subj)
-        print(connectivity_score)
+        
         return len(lines), final_dist, connectivity_score
 
     def _compare_connectivity(self, lines, ids_per_subj):
