@@ -460,7 +460,8 @@ class MultiSubjectDataset:
                 for group_name in hdf_handle["bundle_dict"].keys():
                     ids = hdf_handle["bundle_dict"][group_name]["ids"][:]
                     self.num_bundles[group_name] = int(ids.max()) + 1
-
+            else:
+                self.num_bundles=None
             (poss_volume_groups, nb_features, poss_strea_groups,
             contains_connectivity) = prepare_groups_info(
                 one_subj, hdf_handle, ref_group_info=None)

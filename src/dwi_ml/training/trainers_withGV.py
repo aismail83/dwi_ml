@@ -83,7 +83,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
         self.tracking_mask_group = tracking_phase_mask_group
 
         self.compute_connectivity = self.batch_loader.data_contains_connectivity
-
+        
         # -------- Checks
         if add_a_tracking_validation_phase and \
                 tracking_phase_mask_group is None:
@@ -131,10 +131,10 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
         else:
             return super()._get_latest_loss_to_supervise_best()
 
-    def validate_one_batch(self, targets, ids_per_subj, bundle_ids=None, epoch=None):
+    def validate_one_batch(self, targets, ids_per_subj,epoch, bundle_ids=None):
         # 1. Compute the local loss as usual.
-        super().validate_one_batch(targets, ids_per_subj,
-                                bundle_ids=bundle_ids, epoch=epoch)
+        super().validate_one_batch(targets, ids_per_subj,epoch,
+                                bundle_ids=bundle_ids)
 
         logger.debug("--> Max peak during validation (forward, before "
                      "GV phase): ")
@@ -142,6 +142,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
 
         # 2. Compute generation losses.
         if self.add_a_tracking_validation_phase:
+           
             if (epoch + 1) % self.tracking_phase_frequency == 0:
                 logger.debug("Additional tracking-like generation validation "
                              "from batch.")
@@ -154,7 +155,9 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
                 if self.compute_connectivity:
                     self.tracking_connectivity_score_monitor.update(
                         connectivity, weight=gen_n)
+           
             elif len(self.tracking_mean_final_distance_monitor.average_per_epoch) == 0:
+                
                 logger.info("Skipping tracking-like generation validation "
                             "from batch. No values yet: adding fake initial "
                             "values.")
@@ -205,7 +208,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
 
         # 2. Connectivity scores, if available (else None)
         connectivity_score = self._compare_connectivity(lines, ids_per_subj)
-
+        print(connectivity_score)
         return len(lines), final_dist, connectivity_score
 
     def _compare_connectivity(self, lines, ids_per_subj):
@@ -300,7 +303,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
 
             # Supposing the model receives the current input and current
             # position.
-            model_outputs = self.model(subj_inputs, n_last_pos)
+            model_outputs,_,_ = self.model(subj_inputs, n_last_pos)
 
             next_dirs = self.model.get_tracking_directions(
                 model_outputs, algo='det', eos_stopping_thresh=0.5)

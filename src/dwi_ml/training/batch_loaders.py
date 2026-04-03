@@ -119,7 +119,10 @@ class DWIMLStreamlinesBatchLoader:
         self.model = model
         self.streamline_group_name = streamline_group_name
         self.use_bundle_ids = use_bundle_ids
-        self.num_bundles =dataset.num_bundles[streamline_group_name]
+        if dataset.num_bundles is not None:
+            self.num_bundles = dataset.num_bundles.get(streamline_group_name, None)
+        else:
+            self.num_bundles = None
         self.bundle_emb_dim=bundle_emb_dim
 
         # Find idx of streamline group
@@ -128,7 +131,7 @@ class DWIMLStreamlinesBatchLoader:
         self.data_contains_connectivity = \
             self.dataset.streamlines_contain_connectivity[
                 self.streamline_group_idx]
-        
+    
         # Set random numbers
         self.rng = rng
         self.np_rng = np.random.RandomState(self.rng)
@@ -342,10 +345,13 @@ class DWIMLStreamlinesBatchLoader:
         batch_streamlines = [torch.as_tensor(s) for s in batch_streamlines]
 
         # Convert bundle IDs if used
-        if batch_bundle_ids is not None:
+
+     
+        if len(batch_bundle_ids) > 0:
             batch_bundle_ids = torch.as_tensor(batch_bundle_ids, dtype=torch.long).view(-1)
         else:
             batch_bundle_ids = None
+        
         
         return batch_streamlines, final_s_ids_per_subj, batch_bundle_ids
         

@@ -233,13 +233,22 @@ class MainModelAbstract(torch.nn.Module):
     def compute_bundles_class_weights(self, subset, num_classes=21):
         """
         Compute dataset-level class weights from all bundle IDs in the subset.
+        Returns None if no bundle IDs are found.
         """
         if subset is None:
             raise ValueError("subset is None. Pass dataset.training_set.")
+
         all_train_bundle_ids = []
 
         with h5py.File(subset.hdf5_file, "r") as f:
-            for subj_id in f.keys():  # 🔥 plus sûr que subset.subjects
+            subject_ids = getattr(subset, "subjects", None)
+            if subject_ids is None:
+                subject_ids = list(f.keys())
+
+            for subj_id in subject_ids:
+                if subj_id not in f:
+                    continue
+
                 subj_group = f[subj_id]
 
                 for group_name in subset.streamline_groups:
@@ -250,17 +259,37 @@ class MainModelAbstract(torch.nn.Module):
 
                     if "data_per_streamline" not in streamlines_group:
                         continue
-                    if "bundle_ID" not in streamlines_group["data_per_streamline"]:
+
+                    data_per_streamline = streamlines_group["data_per_streamline"]
+
+                    # Tolérant à plusieurs noms possibles
+                    possible_keys = ["bundle_ID", "bundle_id", "bundle_ids"]
+                    found_key = None
+                    for k in possible_keys:
+                        if k in data_per_streamline:
+                            found_key = k
+                            break
+
+                    if found_key is None:
                         continue
 
-                    bundle_ids = streamlines_group["data_per_streamline"]["bundle_ID"][:]
+                    bundle_ids = data_per_streamline[found_key][:]
+                    if len(bundle_ids) == 0:
+                        continue
+
                     bundle_ids = torch.as_tensor(bundle_ids, dtype=torch.long).view(-1)
                     all_train_bundle_ids.append(bundle_ids)
 
-        if len(all_train_bundle_ids) == 0:
-            raise RuntimeError("No bundle_ID found in the subset.")
+        if not all_train_bundle_ids:
+            logger.warning(
+                "No bundle_ID found in the subset. Returning None for class weights."
+            )
+            return None
 
         all_train_bundle_ids = torch.cat(all_train_bundle_ids, dim=0)
+
+        inferred_num_classes = int(all_train_bundle_ids.max().item()) + 1
+        num_classes = max(num_classes, inferred_num_classes)
 
         class_counts = torch.bincount(all_train_bundle_ids, minlength=num_classes).float()
 
@@ -274,8 +303,6 @@ class MainModelAbstract(torch.nn.Module):
             )
 
         return class_weights
-    
-
 
     def compute_bundle_loss(self, bundle_logits=None, bundle_ids=None) -> torch.Tensor:
         """
@@ -286,6 +313,7 @@ class MainModelAbstract(torch.nn.Module):
                 return bundle_logits.new_zeros(())
             elif bundle_logits is None:
                 return 0
+            
             device = self.device if hasattr(self, "device") else "cpu"
             return torch.tensor(0.0, device=device)
 

@@ -68,26 +68,18 @@ def init_from_args(args, sub_loggers_level):
     # Prepare the dataset
     dataset = prepare_multisubjectdataset(args, load_testing=False,
                                           log_level=sub_loggers_level)
-    # Preparing the batch
-    modelAbstract=MainModelAbstract(experiment_name=args.experiment_name, 
-                                    subset=dataset.training_set,
-                             step_size=args.step_size, 
-                             compress_lines=args.compress_th,)
-    group_loader= prepare_batch_loader(dataset, modelAbstract, args, sub_loggers_level)
-   
-    
+
     # Preparing the model
-    # (Direction getter)
     dg_args = check_args_direction_getter(args)
-    # (Nb features)
+
     input_group_idx = dataset.volume_groups.index(args.input_group_name)
     args.nb_features = dataset.nb_features[input_group_idx]
-    # Final model
+
     with Timer("\n\nPreparing model", newline=True, color='yellow'):
-        # INPUTS: verifying args
         model = Learn2TrackModel(
             experiment_name=args.experiment_name,
-            step_size=args.step_size, compress_lines=args.compress_th,
+            step_size=args.step_size,
+            compress_lines=args.compress_th,
             # PREVIOUS DIRS
             prev_dirs_embedding_key=args.prev_dirs_embedding_key,
             prev_dirs_embedded_size=args.prev_dirs_embedded_size,
@@ -96,25 +88,29 @@ def init_from_args(args, sub_loggers_level):
             # INPUTS
             input_embedding_key=args.input_embedding_key,
             input_embedded_size=args.input_embedded_size,
-            nb_features=args.nb_features, kernel_size=args.kernel_size,
+            nb_features=args.nb_features,
+            kernel_size=args.kernel_size,
             nb_cnn_filters=args.nb_cnn_filters,
             # RNN
-            rnn_key=args.rnn_key, rnn_layer_sizes=args.rnn_layer_sizes,
+            rnn_key=args.rnn_key,
+            rnn_layer_sizes=args.rnn_layer_sizes,
             dropout=args.dropout,
             use_layer_normalization=args.use_layer_normalization,
             use_skip_connection=args.use_skip_connection,
             # TRACKING MODEL
-            dg_key=args.dg_key, dg_args=dg_args,
+            dg_key=args.dg_key,
+            dg_args=dg_args,
             # Other
             neighborhood_type=args.neighborhood_type,
             neighborhood_radius=args.neighborhood_radius,
             neighborhood_resolution=args.neighborhood_resolution,
             log_level=sub_loggers_level,
-            # Bundle options 
-            use_bundle_ids=group_loader.use_bundle_ids ,
-            bundle_emb_dim=group_loader.bundle_emb_dim,
-            num_bundles=group_loader.num_bundles,
-            predict_bundle_ids=args.predict_bundle_ids)
+            # Bundle options
+            use_bundle_ids=args.use_bundle_ids,
+            bundle_emb_dim=args.bundle_emb_dim,
+            num_bundles=None,
+            predict_bundle_ids=args.predict_bundle_ids
+        )
 
         logging.info("Learn2track model final parameters:" +
                      format_dict_to_str(model.params_for_checkpoint))
@@ -122,43 +118,58 @@ def init_from_args(args, sub_loggers_level):
         logging.info("Computed parameters:" +
                      format_dict_to_str(model.computed_params_for_display))
 
-    # Preparing the batch samplers
-    model.bundle_class_weights = model.compute_bundles_class_weights(
-        dataset.training_set, num_classes=21
-    )
+    # Preparing the batch samplers / loaders
     batch_sampler = prepare_batch_sampler(dataset, args, sub_loggers_level)
     batch_loader = prepare_batch_loader(dataset, model, args, sub_loggers_level)
+
+    if args.use_bundle_ids:
+        model.num_bundles = batch_loader.num_bundles
+
+    if args.predict_bundle_ids:
+        model.bundle_class_weights = model.compute_bundles_class_weights(
+            dataset.training_set, num_classes=21
+        )
+    else:
+        model.bundle_class_weights = None
 
     # Instantiate trainer
     with Timer("\n\nPreparing trainer", newline=True, color='red'):
         lr = format_lr(args.learning_rate)
         trainer = Learn2TrackTrainer(
-            model=model, experiments_path=args.experiments_path,
-            experiment_name=args.experiment_name, batch_sampler=batch_sampler,
+            model=model,
+            experiments_path=args.experiments_path,
+            experiment_name=args.experiment_name,
+            batch_sampler=batch_sampler,
             batch_loader=batch_loader,
             # COMET
             comet_project=args.comet_project,
             comet_workspace=args.comet_workspace,
             # TRAINING
-            learning_rates=lr, weight_decay=args.weight_decay,
-            optimizer=args.optimizer, max_epochs=args.max_epochs,
+            learning_rates=lr,
+            weight_decay=args.weight_decay,
+            optimizer=args.optimizer,
+            max_epochs=args.max_epochs,
             max_batches_per_epoch_training=args.max_batches_per_epoch_training,
             max_batches_per_epoch_validation=args.max_batches_per_epoch_validation,
-            patience=args.patience, patience_delta=args.patience_delta,
-            from_checkpoint=False, clip_grad=args.clip_grad,
-            # (generation validation:)
+            patience=args.patience,
+            patience_delta=args.patience_delta,
+            from_checkpoint=False,
+            clip_grad=args.clip_grad,
+            # generation validation
             add_a_tracking_validation_phase=args.add_a_tracking_validation_phase,
             tracking_phase_frequency=args.tracking_phase_frequency,
             tracking_phase_nb_segments_init=args.tracking_phase_nb_segments_init,
             tracking_phase_mask_group=args.tracking_mask,
             # MEMORY
-            nb_cpu_processes=args.nbr_processes, use_gpu=args.use_gpu,
-            log_level=args.verbose)
+            nb_cpu_processes=args.nbr_processes,
+            use_gpu=args.use_gpu,
+            log_level=args.verbose
+        )
+
         logging.info("Trainer params : " +
                      format_dict_to_str(trainer.params_for_checkpoint))
 
     return trainer
-
 
 def main():
     p = prepare_arg_parser()
