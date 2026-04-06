@@ -292,7 +292,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
         # Based on the tracker
         def update_memory_after_removing_lines(_, __):
             pass
-
+    
         def get_dirs_at_last_pos(subj_lines: List[torch.Tensor], n_last_pos):
             nonlocal subj_idx
 
@@ -307,6 +307,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
 
             next_dirs = self.model.get_tracking_directions(
                 model_outputs, algo='det', eos_stopping_thresh=0.5)
+            print(next_dirs)
             return next_dirs
 
         # Running the propagation separately for each subject

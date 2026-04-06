@@ -301,7 +301,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         # Correct interpolation and management of points should be done before.
         if self.context is None:
             raise ValueError("Please set context before usage.")
-
+        
         # Right now input is always flattened (interpolation is implemented
         # that way). For CNN, we will rearrange it ourselves.
         assert x[0].shape[-1] == self.raw_input_size, \
@@ -314,7 +314,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         # sequences.
         unsorted_indices = None
         sorted_indices = None
-        if self.context != 'tracking':
+        if not self.context =='tracking':
             # Ordering streamlines per length.
             lengths = torch.as_tensor([len(s) for s in x])
             _, sorted_indices = torch.sort(lengths, descending=True)
@@ -337,7 +337,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
             if bundle_ids.numel() == 1 and len(x) > 1:
                 bundle_ids = bundle_ids.expand(len(x))
 
-            if self.context != 'tracking':
+            if not self.context == 'tracking':
                 bundle_ids = bundle_ids[sorted_indices.to(bundle_ids.device)]
 
             if bundle_ids.numel() != len(x):
@@ -374,7 +374,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         else:
             b_list = None
 
-        x = pack_sequence(x, enforce_sorted=False)
+        x = pack_sequence(x)
         batch_sizes = x.batch_sizes
 
         # Avoid unpacking and packing back if not needed.
@@ -431,11 +431,11 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         assert x.data.shape[-1] == self.direction_getter.input_size, \
             "Expecting input to direction getter to be of size {}. Got {}" \
             .format(self.direction_getter.input_size, x.data.shape[-1])
-
+        
         x = self.direction_getter(x)
 
         # Unpacking.
-        if self.context != 'tracking':
+        if not self.context == 'tracking':
             # During tracking: keep as one single tensor.
             if 'gaussian' in self.dg_key or 'fisher' in self.dg_key:
                 # Separating mean, sigmas (gaussian) or mean, kappa (fisher)
@@ -455,7 +455,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         if return_hidden:
             # Return the hidden states too. Necessary for the generative
             # (tracking) part, done step by step.
-            if self.context != 'tracking':
+            if  not self.context == 'tracking':
                 # Must also re-sort hidden states.
                 if self.rnn_model.rnn_torch_key == 'lstm':
                     # LSTM: For each layer, states are tuples; (h_t, C_t)
@@ -473,62 +473,8 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
 
         else:
             out_hidden_recurrent_states = None
-
+        
         return x, out_hidden_recurrent_states, bundle_logits_per_line
-
-    def copy_prev_dir(self, dirs):
-        if 'regression' in self.dg_key:
-            # Regression: The latest previous dir will be used as skip
-            # connection on the output.
-            # Either take dirs and add [0, 0, 0] at each first position.
-            # Or use pre-computed:
-            copy_prev_dir = [torch.nn.functional.pad(cp, [0, 0, 1, 0])
-                             for cp in dirs]
-            copy_prev_dir = pack_sequence(copy_prev_dir)
-            copy_prev_dir = copy_prev_dir.data
-        elif self.dg_key == 'sphere-classification':
-            # Converting the input directions into classes the same way as
-            # during loss, but convert to one-hot.
-            # The first previous dir (0) converts to index 0.
-            if self.context == 'tracking':
-                if dirs[0].shape[0] == 0:
-                    copy_prev_dir = torch.zeros(
-                        len(dirs),
-                        len(self.direction_getter.torch_sphere.vertices),
-                        device=self.device)
-                else:
-                    # Take only the last point.
-                    dirs = [d[-1, :][None, :] for d in dirs]
-                    copy_prev_dir = convert_dirs_to_class(
-                        dirs, self.direction_getter.torch_sphere,
-                        smooth_labels=False, add_sos=False, add_eos=False,
-                        to_one_hot=True)
-                    copy_prev_dir = pack_sequence(copy_prev_dir)
-            else:
-                # Take all points.
-                copy_prev_dir = convert_dirs_to_class(
-                    dirs, self.direction_getter.torch_sphere,
-                    smooth_labels=False, add_sos=False, add_eos=False,
-                    to_one_hot=True)
-
-                # Add zeros as previous dir at the first position
-                copy_prev_dir = [torch.nn.functional.pad(cp, [0, 0, 1, 0])
-                                 for cp in copy_prev_dir]
-                copy_prev_dir = pack_sequence(copy_prev_dir)
-
-            # Making the one from one-hot important for the sigmoid.
-            copy_prev_dir = copy_prev_dir.data * 6.0
-
-        elif self.dg_key == 'smooth-sphere-classification':
-            raise NotImplementedError
-        elif 'gaussian' in self.dg_key:
-            # The mean of the gaussian = the previous dir
-            raise NotImplementedError
-        else:
-            # Fisher: not sure how to do that.
-            raise NotImplementedError
-
-        return copy_prev_dir
 
     def take_lines_in_hidden_state(self, hidden_states, lines_to_keep):
         """

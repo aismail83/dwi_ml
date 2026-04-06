@@ -145,11 +145,13 @@ def _take_one_step_or_go_straight(
 
     if isinstance(next_dirs, list):
         next_dirs = torch.vstack(next_dirs)
-
+    
     if normalize_directions:
         next_dirs = next_dirs / torch.linalg.norm(next_dirs, dim=-1)[:, None]
 
+
     if previous_dirs is not None:
+        
         # Verify angle
         next_dirs = _verify_angle(
             next_dirs, previous_dirs, theta,

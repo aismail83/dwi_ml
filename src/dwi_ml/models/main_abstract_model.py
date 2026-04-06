@@ -305,23 +305,19 @@ class MainModelAbstract(torch.nn.Module):
         return class_weights
 
     def compute_bundle_loss(self, bundle_logits=None, bundle_ids=None) -> torch.Tensor:
-        """
-        Compute the bundle classification loss.
-        """
-        if bundle_logits is None or bundle_ids is None:
-            if bundle_logits is not None:
-                return bundle_logits.new_zeros(())
-            elif bundle_logits is None:
-                return 0
-            
-            device = self.device if hasattr(self, "device") else "cpu"
+        if bundle_logits is None and bundle_ids is None:
+            device = self.device if self.device is not None else "cpu"
             return torch.tensor(0.0, device=device)
+
+        if bundle_logits is None or bundle_ids is None:
+            raise ValueError(
+                "bundle_logits and bundle_ids must either both be provided or both be None."
+            )
 
         bundle_ids = bundle_ids.to(bundle_logits.device).long()
 
-        weight = None
-        if self.bundle_class_weights is not None:
-            weight = self.bundle_class_weights.to(bundle_logits.device)
-        criterion_bundle = torch.nn.CrossEntropyLoss(weight=weight)
+        weight = None if self.bundle_class_weights is None \
+            else self.bundle_class_weights.to(bundle_logits.device)
 
+        criterion_bundle = torch.nn.CrossEntropyLoss(weight=weight)
         return criterion_bundle(bundle_logits, bundle_ids)
