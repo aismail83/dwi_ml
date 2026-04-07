@@ -121,14 +121,15 @@ class TCNLearn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
 
             def get_dirs_at_last_pos(current_lines: List[torch.Tensor], _n_last_pos):
                 nonlocal subj_idx
-
-                context_len = self.model.context_len
-
+                
+                context_len = getattr(self.model, "context_len", None)
+                assert context_len is not None and context_len > 0, \
+                    "Model.context_len must be a positive integer for TCN tracking."
                 hist_lines = [
                     line[-context_len:] if len(line) > context_len else line
                     for line in current_lines
                 ]
-                
+
                 subj_dict = {subj_idx: slice(0, len(hist_lines))}
                 subj_inputs = self.batch_loader.load_batch_inputs(hist_lines, subj_dict)
 
@@ -139,6 +140,10 @@ class TCNLearn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
                     )
 
                     lengths = [len(line) for line in hist_lines]
+                    expected_n = sum(lengths)
+                    assert len(flat_outputs) == expected_n, \
+                        f"Expected {expected_n} outputs, got {len(flat_outputs)}."
+
                     last_indices = np.cumsum(lengths) - 1
                     last_indices = torch.as_tensor(
                         last_indices, device=flat_outputs.device, dtype=torch.long
@@ -148,10 +153,10 @@ class TCNLearn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
 
                     next_dirs = self.model.get_tracking_directions(
                         last_outputs,
-                        algo='det',
+                        algo="det",
                         eos_stopping_thresh=0.5
                     )
-                
+
                 return next_dirs
                                                 
             propagated_lines = propagate_multiple_lines(

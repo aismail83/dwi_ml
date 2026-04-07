@@ -55,7 +55,6 @@ class Learn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
             subj_dict = {subj_idx: slice(0, len(n_last_pos))}
             subj_inputs = self.batch_loader.load_batch_inputs(n_last_pos,
                                                               subj_dict)
-
             model_outputs, subj_hidden_states,_ = self.model(
                 subj_inputs, subj_lines,
                 hidden_recurrent_states=subj_hidden_states,

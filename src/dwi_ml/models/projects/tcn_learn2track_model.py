@@ -50,9 +50,11 @@ class TCNBlock(nn.Module):
         self.activation = nn.ReLU()
 
     def forward(self, x, mask=None):
-        out = self.conv(x)
+        if mask is not None:
+            x = x * mask[:, None, :].float()
 
-        # Causal trimming
+        out = self.conv(x)
+        # Important: mask after residual addition.
         if self.conv.padding[0] > 0:
             out = out[:, :, :-self.conv.padding[0]]
 
@@ -64,7 +66,6 @@ class TCNBlock(nn.Module):
             res = res[:, :, -out.size(2):]
 
         out = out + res
-
         # Important: mask after residual addition.
         if mask is not None:
             out = out * mask[:, None, :].float()
