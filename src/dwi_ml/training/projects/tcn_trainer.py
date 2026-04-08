@@ -119,16 +119,22 @@ class TCNLearn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
                 """
                 return
 
-            def get_dirs_at_last_pos(current_lines: List[torch.Tensor], _n_last_pos):
+            
+           
+            def get_dirs_at_last_pos(current_lines: List[torch.Tensor], last_pos=None):
                 nonlocal subj_idx
-                
+        
                 context_len = getattr(self.model, "context_len", None)
-                assert context_len is not None and context_len > 0, \
+                assert isinstance(context_len, int) and context_len > 0, \
                     "Model.context_len must be a positive integer for TCN tracking."
+
                 hist_lines = [
                     line[-context_len:] if len(line) > context_len else line
                     for line in current_lines
                 ]
+
+                assert all(len(line) > 0 for line in hist_lines), \
+                    "All streamlines must be non-empty."
 
                 subj_dict = {subj_idx: slice(0, len(hist_lines))}
                 subj_inputs = self.batch_loader.load_batch_inputs(hist_lines, subj_dict)
@@ -139,16 +145,17 @@ class TCNLearn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
                         input_streamlines=hist_lines
                     )
 
-                    lengths = [len(line) for line in hist_lines]
-                    expected_n = sum(lengths)
-                    assert len(flat_outputs) == expected_n, \
-                        f"Expected {expected_n} outputs, got {len(flat_outputs)}."
-
-                    last_indices = np.cumsum(lengths) - 1
-                    last_indices = torch.as_tensor(
-                        last_indices, device=flat_outputs.device, dtype=torch.long
+                    lengths = torch.tensor(
+                        [len(line) for line in hist_lines],
+                        device=flat_outputs.device,
+                        dtype=torch.long
                     )
 
+                    expected_n = int(lengths.sum().item())
+                    assert flat_outputs.shape[0] == expected_n, \
+                        f"Expected {expected_n} outputs, got {flat_outputs.shape[0]}."
+
+                    last_indices = torch.cumsum(lengths, dim=0) - 1
                     last_outputs = flat_outputs[last_indices]
 
                     next_dirs = self.model.get_tracking_directions(
@@ -157,8 +164,7 @@ class TCNLearn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
                         eos_stopping_thresh=0.5
                     )
 
-                return next_dirs
-                                                
+                return next_dirs                                                  
             propagated_lines = propagate_multiple_lines(
                 subj_lines,
                 update_memory_after_removing_lines=update_memory_after_removing_lines,

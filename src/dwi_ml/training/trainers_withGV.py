@@ -205,7 +205,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
         final_dist = l2_loss(computed_last_pos, last_pos)
         final_dist = torch.mean(final_dist)
         final_dist = final_dist.item()
-
+        
         # 2. Connectivity scores, if available (else None)
         connectivity_score = self._compare_connectivity(lines, ids_per_subj)
         
@@ -307,7 +307,6 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
 
             next_dirs = self.model.get_tracking_directions(
                 model_outputs, algo='det', eos_stopping_thresh=0.5)
-            print(next_dirs)
             return next_dirs
 
         # Running the propagation separately for each subject
@@ -334,5 +333,4 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
                 verify_opposite_direction=False,
                 mask=tracking_mask, max_nbr_pts=max_nbr_pts,
                 append_last_point=False, normalize_directions=True))
-
         return final_lines

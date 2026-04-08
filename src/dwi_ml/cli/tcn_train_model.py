@@ -238,7 +238,7 @@ def init_from_args(args, sub_loggers_level):
             # Bundle options
             use_bundle_ids=_safe_getattr(group_loader, "use_bundle_ids", False),
             bundle_emb_dim=_safe_getattr(group_loader, "bundle_emb_dim", None),
-            num_bundles=_safe_getattr(group_loader, "num_bundles", None),
+            num_bundles=args.num_bundles,
             predict_bundle_ids=_safe_getattr(
                 group_loader, "predict_bundle_ids", False
             ),

@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-TCN model for tractography tracking.
+Two-block TCN model for tractography tracking.
 
-Compatible with the Learn2Track trainer API:
-- uses ModelWithDirectionGetter
-- instantiates self.direction_getter
-- returns (model_outputs, hidden_states, bundle_logits_per_line)
+Main idea:
+- Block 1 processes the streamline sequence.
+- Block 1 predicts bundle classes point by point.
+- These point-wise bundle logits are reused as extra features for Block 2.
+- Block 2 predicts features used by the direction getter.
+
+Returns:
+    (model_outputs, hidden_states, bundle_logits_per_line)
 """
 
 import logging
@@ -19,7 +23,6 @@ from torch.nn.utils.rnn import invert_permutation
 from dwi_ml.data.processing.streamlines.post_processing import (
     compute_directions, normalize_directions, compute_n_previous_dirs
 )
-from dwi_ml.models.embeddings import NoEmbedding
 from dwi_ml.models.main_models import (
     ModelWithPreviousDirections,
     ModelWithDirectionGetter,
@@ -54,7 +57,6 @@ class TCNBlock(nn.Module):
             x = x * mask[:, None, :].float()
 
         out = self.conv(x)
-        # Important: mask after residual addition.
         if self.conv.padding[0] > 0:
             out = out[:, :, :-self.conv.padding[0]]
 
@@ -66,7 +68,7 @@ class TCNBlock(nn.Module):
             res = res[:, :, -out.size(2):]
 
         out = out + res
-        # Important: mask after residual addition.
+
         if mask is not None:
             out = out * mask[:, None, :].float()
 
@@ -103,7 +105,14 @@ class TCNLearn2TrackModel(
     ModelWithOneInput
 ):
     """
-    TCN-based tracking model compatible with the Learn2Track infrastructure.
+    Two-block TCN model compatible with Learn2Track-like API.
+
+    Block 1:
+        input sequence -> TCN -> bundle logits per point
+
+    Block 2:
+        input = [embedded_input ; bundle_logits_per_point]
+        -> TCN -> direction getter
     """
 
     def __init__(self,
@@ -124,7 +133,7 @@ class TCNLearn2TrackModel(
                  nb_cnn_filters: Optional[List[int]],
                  kernel_size: Optional[Union[int, List[int]]],
 
-                 # TCN
+                 # BLOCK 1
                  tcn_hidden_size: int,
                  tcn_num_layers: int,
                  tcn_kernel_size: int,
@@ -144,12 +153,11 @@ class TCNLearn2TrackModel(
                  use_bundle_ids: bool = False,
                  bundle_emb_dim: Optional[int] = None,
                  num_bundles: Optional[int] = None,
-                 predict_bundle_ids: bool = False,
+                 predict_bundle_ids: bool = True,
 
                  # REGULARIZATION
                  dropout: float = 0.1):
 
-        
         super().__init__(
             experiment_name=experiment_name,
             step_size=step_size,
@@ -175,10 +183,13 @@ class TCNLearn2TrackModel(
             prev_dirs_embedding_key=prev_dirs_embedding_key,
             normalize_prev_dirs=normalize_prev_dirs,
 
-            # For super ModelForTracking
+            # Direction getter
             dg_args=dg_args,
             dg_key=dg_key
         )
+
+        if dropout < 0 or dropout > 1:
+            raise ValueError("The dropout rate must be between 0 and 1.")
 
         self.dropout = dropout
         self.log_level = log_level
@@ -186,6 +197,11 @@ class TCNLearn2TrackModel(
 
         self.use_bundle_ids = bool(use_bundle_ids)
         self.predict_bundle_ids = bool(predict_bundle_ids)
+
+        if self.predict_bundle_ids and (num_bundles is None or num_bundles <= 0):
+            raise ValueError(
+                "num_bundles must be provided and > 0 when predict_bundle_ids=True"
+            )
 
         if self.use_bundle_ids:
             if bundle_emb_dim is None:
@@ -214,27 +230,51 @@ class TCNLearn2TrackModel(
             )
         else:
             self.bundle_emb_dim = 0
-            self.num_bundles = 0
+            self.num_bundles = int(num_bundles) if num_bundles is not None else 0
             self.bundle_emb = None
-
-        if dropout < 0 or dropout > 1:
-            raise ValueError("The dropout rate must be between 0 and 1.")
 
         self.embedding_dropout = nn.Dropout(self.dropout)
 
-        # Raw size before optional input embedding
+        # Raw input size before optional embedding
         self.raw_input_size = nb_features * self.nb_neighbors
 
-        # Size entering the TCN
+        
+
+        # Embedded input size used as point feature x^(1)
         self.input_size = self.computed_input_embedded_size
         if self.use_bundle_ids:
             self.input_size += self.bundle_emb_dim
         if self.nb_previous_dirs > 0:
             self.input_size += self.prev_dirs_embedded_size
 
-        # TCN backbone
-        self.tcn = TCN(
+        # -------------------------
+        # BLOCK 1
+        # -------------------------
+        self.block1 = TCN(
             in_channels=self.input_size,
+            hidden_channels=tcn_hidden_size,
+            out_channels=tcn_hidden_size,
+            kernel_size=tcn_kernel_size,
+            num_layers=tcn_num_layers,
+            dropout=dropout
+        )
+        
+        # Point-wise bundle classifier
+        
+        self.bundle_classifier = nn.Linear(
+                self.block1.output_size, self.num_bundles)
+           
+        # -------------------------
+        # BLOCK 2
+        # input to block 2 = [x^(1) ; y_bundle]
+        # -------------------------
+        block2_input_size = self.input_size
+        if self.num_bundles > 0:
+            block2_input_size += self.num_bundles
+        self.block2_input_size = block2_input_size
+
+        self.block2 = TCN(
+            in_channels=block2_input_size,
             hidden_channels=tcn_hidden_size,
             out_channels=tcn_hidden_size,
             kernel_size=tcn_kernel_size,
@@ -247,28 +287,16 @@ class TCNLearn2TrackModel(
             2 ** tcn_num_layers - 1
         )
 
-        # Optional SSL head kept for future use.
+        # Optional SSL head
         self.ssl_head = nn.Sequential(
-            nn.Linear(self.tcn.output_size, self.tcn.output_size),
+            nn.Linear(self.block2.output_size, self.block2.output_size),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(self.tcn.output_size, 3)
+            nn.Linear(self.block2.output_size, 3)
         )
 
-        # Direction getter
-        self.instantiate_direction_getter(self.tcn.output_size)
-
-        # Optional bundle classifier head
-        if self.predict_bundle_ids:
-            if self.num_bundles <= 0:
-                raise ValueError(
-                    "num_bundles must be > 0 when predict_bundle_ids=True"
-                )
-            self.bundle_classifier = nn.Linear(
-                self.tcn.output_size, self.num_bundles
-            )
-        else:
-            self.bundle_classifier = None
+        # Direction getter uses Block 2 output
+        self.instantiate_direction_getter(self.block2.output_size)
 
     def set_context(self, context):
         assert context in ['training', 'validation', 'tracking', 'visu',
@@ -280,9 +308,9 @@ class TCNLearn2TrackModel(
         params = super().params_for_checkpoint
         params.update({
             'nb_features': int(self.nb_features),
-            'tcn_hidden_size': self.tcn.network[-1].conv.out_channels,
-            'tcn_num_layers': len(self.tcn.network),
-            'tcn_kernel_size': self.tcn.network[0].conv.kernel_size[0],
+            'tcn_hidden_size': self.block1.network[-1].conv.out_channels,
+            'tcn_num_layers': len(self.block1.network),
+            'tcn_kernel_size': self.block1.network[0].conv.kernel_size[0],
             'dropout': self.dropout,
             'use_bundle_ids': self.use_bundle_ids,
             'bundle_emb_dim': self.bundle_emb_dim,
@@ -294,8 +322,31 @@ class TCNLearn2TrackModel(
     @property
     def computed_params_for_display(self):
         p = super().computed_params_for_display
-        p['tcn_output_size'] = self.tcn.output_size
+        p['block1_output_size'] = self.block1.output_size
+        p['block2_input_size'] = self.block2_input_size
+        p['block2_output_size'] = self.block2.output_size
         return p
+
+    def _flatten_time_major(self, seq_tensor, batch_sizes):
+        """
+        Recreate PackedSequence.data layout from padded tensor.
+
+        Parameters
+        ----------
+        seq_tensor: torch.Tensor
+            Shape (B, T, F)
+        batch_sizes: torch.Tensor
+            Packed sequence batch sizes.
+
+        Returns
+        -------
+        flat_out: torch.Tensor
+            Shape (sum(lengths), F)
+        """
+        return torch.cat(
+            [seq_tensor[:batch_sizes[t], t, :] for t in range(len(batch_sizes))],
+            dim=0
+        )
 
     def forward(self,
                 x: List[torch.Tensor],
@@ -305,14 +356,26 @@ class TCNLearn2TrackModel(
                 return_hidden: bool = False,
                 point_idx: int = None):
         """
+        Parameters
+        ----------
+        x : List[Tensor]
+            List of streamlines represented as per-point features.
+        input_streamlines : List[Tensor]
+            Needed when previous directions are used.
+        bundle_ids : Tensor
+            Optional streamline-level bundle ids for embedding only.
+        hidden_recurrent_states : ignored
+        return_hidden : bool
+        point_idx : Optional[int]
+
         Returns
         -------
         model_outputs
-            Output ready for compute_loss() or get_tracking_directions().
+            Direction getter outputs.
         out_hidden_recurrent_states
-            Always None for TCN, kept for API compatibility.
+            Always None (kept for API compatibility).
         bundle_logits_per_line
-            None unless bundle prediction head is enabled.
+            Point-wise bundle logits, one tensor per streamline.
         """
         del hidden_recurrent_states
 
@@ -332,17 +395,16 @@ class TCNLearn2TrackModel(
             unsorted_indices = invert_permutation(sorted_indices)
             x = [x[i] for i in sorted_indices]
             if input_streamlines is not None:
-                input_streamlines = [input_streamlines[i]
-                                     for i in sorted_indices]
+                input_streamlines = [input_streamlines[i] for i in sorted_indices]
 
         dev = next(self.parameters()).device
 
-        # Bundle IDs
+        # -------------------------
+        # Bundle ids for optional embedding
+        # -------------------------
         if self.use_bundle_ids:
             if self.context == 'tracking' or bundle_ids is None:
-                bundle_ids = torch.zeros(
-                    len(x), device=dev, dtype=torch.long
-                )
+                bundle_ids = torch.zeros(len(x), device=dev, dtype=torch.long)
             else:
                 bundle_ids = torch.as_tensor(
                     bundle_ids, device=dev, dtype=torch.long
@@ -363,13 +425,14 @@ class TCNLearn2TrackModel(
         else:
             bundle_ids = None
 
+        # -------------------------
         # Previous directions
+        # -------------------------
         n_prev_dirs = None
         if self.nb_previous_dirs > 0:
             if input_streamlines is None:
                 raise ValueError(
-                    "input_streamlines must be provided when "
-                    "nb_previous_dirs > 0"
+                    "input_streamlines must be provided when nb_previous_dirs > 0"
                 )
 
             dirs = compute_directions(input_streamlines)
@@ -379,25 +442,29 @@ class TCNLearn2TrackModel(
             n_prev_dirs = compute_n_previous_dirs(
                 dirs, self.nb_previous_dirs, point_idx=point_idx
             )
-            n_prev_dirs = pack_sequence(
-                n_prev_dirs, enforce_sorted=False
-            )
+            n_prev_dirs = pack_sequence(n_prev_dirs, enforce_sorted=False)
             n_prev_dirs = self.prev_dirs_embedding(n_prev_dirs.data)
             n_prev_dirs = self.embedding_dropout(n_prev_dirs)
 
-        # Bundle embeddings
+        # -------------------------
+        # Optional streamline-level bundle embedding
+        # -------------------------
         if self.use_bundle_ids and bundle_ids is not None:
             b = self.bundle_emb(bundle_ids)
             b_list = [b[i].expand(x[i].shape[0], -1) for i in range(len(x))]
         else:
             b_list = None
 
+        # -------------------------
         # Pack input
+        # -------------------------
         x_packed = pack_sequence(x, enforce_sorted=False)
         batch_sizes = x_packed.batch_sizes
         x_data = x_packed.data
 
+        # -------------------------
         # Input embedding
+        # -------------------------
         if self.input_embedding_key == 'cnn_embedding':
             from dwi_ml.data.processing.space.neighborhood import \
                 unflatten_neighborhood
@@ -421,11 +488,11 @@ class TCNLearn2TrackModel(
         got_size = x_data.shape[-1]
         if got_size != expected_size:
             raise ValueError(
-                f"Wrong feature size before TCN: expected "
+                f"Wrong feature size before Block 1: expected "
                 f"{expected_size}, got {got_size}."
             )
 
-        # Rebuild per-sequence list
+        # x^(1): rebuild per-sequence list after embedding
         seq_features = faster_unpack_sequence(
             PackedSequence(
                 x_data,
@@ -435,10 +502,11 @@ class TCNLearn2TrackModel(
             )
         )
 
-        # Pad for TCN
-        padded = pad_sequence(seq_features, batch_first=True)   # (B, T, F)
-        batch_size, max_len, _ = padded.shape
-        padded = padded.permute(0, 2, 1).contiguous()           # (B, F, T)
+        # -------------------------
+        # Pad sequences
+        # -------------------------
+        padded_x1 = pad_sequence(seq_features, batch_first=True)  # (B, T, F1)
+        batch_size, max_len, _ = padded_x1.shape
 
         mask = torch.zeros(
             batch_size, max_len, dtype=torch.bool, device=dev
@@ -449,16 +517,44 @@ class TCNLearn2TrackModel(
             seq_lengths.append(cur_len)
             mask[i, :cur_len] = True
 
-        # TCN
-        tcn_out = self.tcn(padded, mask)                        # (B, H, T)
-        tcn_out = tcn_out.permute(0, 2, 1).contiguous()        # (B, T, H)
+        # -------------------------
+        # BLOCK 1
+        # -------------------------
+        block1_in = padded_x1.permute(0, 2, 1).contiguous()      # (B, F1, T)
+        block1_out = self.block1(block1_in, mask)                # (B, H1, T)
+        block1_out = block1_out.permute(0, 2, 1).contiguous()    # (B, T, H1)
 
-        # Recreate the PackedSequence.data layout:
-        # at time step t, only the first batch_sizes[t] sequences are active.
-        flat_out = torch.cat(
-            [tcn_out[:batch_sizes[t], t, :] for t in range(len(batch_sizes))],
-            dim=0
-        )
+        # -------------------------
+        # Bundle classification per point
+        # -------------------------
+        
+        bundle_logits = self.bundle_classifier(block1_out)   # (B, T, Cb)
+        bundle_logits = bundle_logits * mask.unsqueeze(-1).float()
+
+        # BLOCK 2 INPUT in (B, T, F)
+        if bundle_logits is not None:
+            block2_in = torch.cat((padded_x1, bundle_logits), dim=-1)   # (B, T, 500+Cb)
+        else:
+            block2_in = padded_x1                                       # (B, T, 500)
+
+        block2_in = block2_in * mask.unsqueeze(-1).float()
+
+        if block2_in.shape[-1] != self.block2_input_size:
+            raise ValueError(
+                f"Wrong feature size before Block 2: expected "
+                f"{self.block2_input_size}, got {block2_in.shape[-1]}."
+            )
+
+        # Convert to (B, F, T) for block2
+        block2_in = block2_in.permute(0, 2, 1).contiguous()            # (B, F2, T)
+        block2_out = self.block2(block2_in, mask)                      # (B, H2, T)
+        block2_out = block2_out.permute(0, 2, 1).contiguous()          # (B, T, H2) T, H2)
+            
+        
+        # -------------------------
+        # Direction getter
+        # -------------------------
+        flat_out = self._flatten_time_major(block2_out, batch_sizes)
 
         assert flat_out.shape[-1] == self.direction_getter.input_size, \
             "Expecting input to direction getter of size {}. Got {}.".format(
@@ -467,10 +563,14 @@ class TCNLearn2TrackModel(
 
         model_outputs = self.direction_getter(flat_out)
 
+        # -------------------------
+        # Bundle logits per line
+        # -------------------------
+        bundle_logits=None
         bundle_logits_per_line = None
-        if self.bundle_classifier is not None:
+        if bundle_logits is not None:
             bundle_logits_per_line = [
-                self.bundle_classifier(tcn_out[i, :seq_lengths[i], :])
+                bundle_logits[i, :seq_lengths[i], :]
                 for i in range(batch_size)
             ]
             if self.context != 'tracking' and unsorted_indices is not None:
@@ -478,7 +578,9 @@ class TCNLearn2TrackModel(
                     bundle_logits_per_line[i] for i in unsorted_indices
                 ]
 
-        # Unpack for non-tracking mode, exactly like Learn2Track
+        # -------------------------
+        # Unpack model outputs for non-tracking mode
+        # -------------------------
         if self.context != 'tracking':
             if 'gaussian' in self.dg_key or 'fisher' in self.dg_key:
                 x1, x2 = model_outputs
@@ -498,6 +600,7 @@ class TCNLearn2TrackModel(
                 model_outputs = [model_outputs[i] for i in unsorted_indices]
 
         out_hidden_recurrent_states = None if not return_hidden else None
+        bundle_logits_per_line=None
         return model_outputs, out_hidden_recurrent_states, bundle_logits_per_line
 
     def take_lines_in_hidden_state(self, hidden_states, lines_to_keep):

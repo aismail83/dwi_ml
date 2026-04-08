@@ -224,7 +224,7 @@ class MainModelAbstract(torch.nn.Module):
     def forward(self, inputs, streamlines):
         raise NotImplementedError
 
-    def compute_loss(self, model_outputs,target_streamlines,bundle_logits=None, bundle_ids=None,average_results=True):
+    def compute_loss(self, model_outputs,target_streamlines,average_results=True,bundle_logits=None, bundle_ids=None):
         raise NotImplementedError
     
 

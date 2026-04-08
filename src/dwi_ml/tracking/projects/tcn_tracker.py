@@ -122,7 +122,7 @@ class TCNTracker(DWIMLTrackerOneInput):
             and model_outputs[2] is None
         ):
             model_outputs = model_outputs[0]
-
+        print(model_outputs)
         # Fisher-von-Mises-style outputs:
         # possible form: (mus, kappas, eos)
         if isinstance(model_outputs, (tuple, list)) and len(model_outputs) >= 2:

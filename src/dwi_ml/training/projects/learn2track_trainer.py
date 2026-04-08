@@ -50,7 +50,7 @@ class Learn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
             # Get dirs for current subject: run model
             nonlocal subj_hidden_states
             nonlocal subj_idx
-
+            
             n_last_pos = [pos[None, :] for pos in n_last_pos]
             subj_dict = {subj_idx: slice(0, len(n_last_pos))}
             subj_inputs = self.batch_loader.load_batch_inputs(n_last_pos,

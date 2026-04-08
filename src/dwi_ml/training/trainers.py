@@ -866,7 +866,7 @@ class DWIMLTrainer:
                         targets, ids_per_subj = data
                         bundle_ids = None
                     
-                    mean_loss, n = self.run_one_batch(targets, ids_per_subj, bundle_ids)
+                    mean_loss, n = self.run_one_batch(targets, ids_per_subj, bundle_ids=bundle_ids)
 
                     # Saving result.
                     # mean loss is a Tensor of a single value. item() converts

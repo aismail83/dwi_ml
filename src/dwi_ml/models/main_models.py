@@ -572,7 +572,7 @@ class ModelWithDirectionGetter(MainModelAbstract):
         average_results: bool = False,
         bundle_logits: Tensor | None = None,
         bundle_ids: Tensor | None = None,
-        lambda_bundle: float = 0.1,
+        lambda_bundle: float = 0.5,
     ) -> tuple[Tensor, Tensor | int]:
         # Direction loss
         loss_dir, n = self.direction_getter.compute_loss(
@@ -586,7 +586,6 @@ class ModelWithDirectionGetter(MainModelAbstract):
         if bundle_logits is not None and bundle_ids is not None:
             loss_bundle = self.compute_bundle_loss(bundle_logits, bundle_ids)
             total_loss = total_loss + lambda_bundle * loss_bundle
-
         return total_loss, n
     
     def move_to(self, device):
