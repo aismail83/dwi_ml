@@ -1124,11 +1124,11 @@ class DWIMLTrainer:
         logger.debug('*** Computing loss')
         targets = self.batch_loader.add_noise_streamlines_loss(
             targets, self.device)
-        results, n = self.model.compute_loss(model_outputs, targets,bundle_logits=bl_per_line,
+        results, n = self.model.compute_loss(model_outputs, targets,average_results=True,bundle_logits=bl_per_line,
                                                 bundle_ids=bundle_ids,
-                                               average_results=True)
+                                               )
 
-        
+        print(results)
         # The mean tensor is a single value. Converting to float using item().
         return results
 
@@ -1274,8 +1274,8 @@ class DWIMLTrainerOneInput(DWIMLTrainer):
         # (batch loader will do it depending on training / valid)
         targets = self.batch_loader.add_noise_streamlines_loss(targets,
                                                                self.device)
-        mean_loss, n = self.model.compute_loss(model_outputs, targets,bundle_logits=bl_per_line,
+        mean_loss, n = self.model.compute_loss(model_outputs, targets,average_results=True, bundle_logits=bl_per_line,
                                                 bundle_ids=bundle_ids,
-                                               average_results=True)
+                                               )
     
         return mean_loss, n

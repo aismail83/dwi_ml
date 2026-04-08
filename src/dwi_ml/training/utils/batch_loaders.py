@@ -44,8 +44,13 @@ def add_args_batch_loader(p: argparse.ArgumentParser):
     action="store_true",
     help="Use bundle ID embedding as additional model input")
 
+
     p.add_argument(
                 '--bundle_emb_dim', type=int, default=8,
+                help="Dimension of the bundle ID embedding. Use 0 to disable bundle embedding."
+            )
+    bl_g.add_argument(
+                '--num_bundles', type=int, default=21,
                 help="Dimension of the bundle ID embedding. Use 0 to disable bundle embedding."
             )
     

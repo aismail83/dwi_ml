@@ -108,7 +108,7 @@ def init_from_args(args, sub_loggers_level):
             # Bundle options
             use_bundle_ids=args.use_bundle_ids,
             bundle_emb_dim=args.bundle_emb_dim,
-            num_bundles=None,
+            num_bundles=args.num_bundles,
             predict_bundle_ids=args.predict_bundle_ids
         )
 
@@ -122,8 +122,8 @@ def init_from_args(args, sub_loggers_level):
     batch_sampler = prepare_batch_sampler(dataset, args, sub_loggers_level)
     batch_loader = prepare_batch_loader(dataset, model, args, sub_loggers_level)
 
-    if args.use_bundle_ids:
-        model.num_bundles = batch_loader.num_bundles
+    if args.use_bundle_ids or args.predict_bundle_ids:
+        model.num_bundles = args.num_bundles
 
     if args.predict_bundle_ids:
         model.bundle_class_weights = model.compute_bundles_class_weights(

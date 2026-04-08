@@ -568,41 +568,27 @@ class ModelWithDirectionGetter(MainModelAbstract):
     def compute_loss(
         self,
         model_outputs: List[Tensor],
-        target_streamlines,
-        bundle_logits: torch.Tensor | None = None,
-        bundle_ids: torch.Tensor | None = None,
+        target_streamlines: Tensor,  # add type
+        average_results: bool = False,
+        bundle_logits: Tensor | None = None,
+        bundle_ids: Tensor | None = None,
         lambda_bundle: float = 0.1,
-        average_results: bool = True,
-        return_eos_probs: bool = False,
-    ):
-        """
-        Compute total loss.
-
-        If bundle_logits and bundle_ids are provided:
-            total_loss = direction_loss + lambda_bundle * bundle_loss
-        Otherwise:
-            total_loss = direction_loss
-        """
-
-        # Direction prediction loss
+    ) -> tuple[Tensor, Tensor | int]:
+        # Direction loss
         loss_dir, n = self.direction_getter.compute_loss(
-            model_outputs,
-            target_streamlines,
-            average_results,
-            return_eos_probs,
+            model_outputs, target_streamlines, average_results
         )
-
         total_loss = loss_dir
 
-        # Optional bundle classification loss
+        # Optional bundle loss
+        if (bundle_logits is None) != (bundle_ids is None):
+            raise ValueError("Either both bundle_logits and bundle_ids must be provided, or neither.")
         if bundle_logits is not None and bundle_ids is not None:
-            loss_bundle = self.compute_bundle_loss(
-                bundle_logits=bundle_logits,
-                bundle_ids=bundle_ids,
-            )
+            loss_bundle = self.compute_bundle_loss(bundle_logits, bundle_ids)
             total_loss = total_loss + lambda_bundle * loss_bundle
 
         return total_loss, n
+    
     def move_to(self, device):
         super().move_to(device)
         self.direction_getter.move_to(device)
