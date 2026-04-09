@@ -195,7 +195,7 @@ def init_from_args(args, sub_loggers_level):
         sub_loggers_level,
     )
 
-    check_args_direction_getter(args)
+    
 
     input_group_idx = dataset.volume_groups.index(args.input_group_name)
     args.nb_features = dataset.nb_features[input_group_idx]

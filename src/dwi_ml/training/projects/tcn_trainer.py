@@ -36,160 +36,67 @@ class TCNLearn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-    def propagate_multiple_lines(
-        self,
-        lines: List[torch.Tensor],
-        ids_per_subj
-    ):
+    def propagate_multiple_lines(self, lines: List[torch.Tensor], ids_per_subj):
         """
-        Propagate streamlines for multiple subjects.
-
-        Parameters
-        ----------
-        lines : List[torch.Tensor]
-            Initial streamlines/seeds to propagate.
-        ids_per_subj : dict
-            Mapping from subject index to slice of lines belonging to that
-            subject.
-
-        Returns
-        -------
-        final_lines : List[torch.Tensor]
-            Propagated streamlines.
+        Tractography propagation of 'lines'.
+        As compared to super, model requires an additional hidden state.
         """
         assert self.model.step_size is not None, \
-            "Cannot propagate compressed streamlines."
+            "We can't propagate compressed streamlines."
 
-        theta = 2 * np.pi
+        # Setting our own limits here.
+        theta = 2 * np.pi  # theta = 360 degrees
         max_nbr_pts = int(200 / self.model.step_size)
 
-        final_lines = []
-
-        for subj_idx, subj_line_idx_slice in ids_per_subj.items():
-            subj_lines = lines[subj_line_idx_slice]
-            subj_lines = [line for line in subj_lines if line is not None]
-
-            if len(subj_lines) == 0:
-                logger.debug("No lines to propagate for subject %s.", subj_idx)
-                continue
-
-            # Normalize streamline format
-            normalized_lines = []
-            for line in subj_lines:
-                if not isinstance(line, torch.Tensor):
-                    line = torch.as_tensor(
-                        line, dtype=torch.float32, device=self.device
-                    )
-                else:
-                    line = line.to(self.device, dtype=torch.float32)
-
-                if line.dim() == 1:
-                    line = line.unsqueeze(0)
-
-                if line.dim() != 2 or line.shape[-1] != 3:
-                    raise ValueError(
-                        f"Unexpected streamline shape for subject {subj_idx}: "
-                        f"{tuple(line.shape)}"
-                    )
-
-                normalized_lines.append(line)
-
-            subj_lines = normalized_lines
-
-            # Load subject tracking mask
-            with h5py.File(self.batch_loader.dataset.hdf5_file, "r") as hdf_handle:
-                subj_id = self.batch_loader.context_subset.subjects[subj_idx]
-                logger.debug(
-                    "Loading subject %s (%s) tracking mask.",
-                    subj_idx,
-                    subj_id,
-                )
-                tracking_mask, _ = prepare_tracking_mask(
-                    hdf_handle,
-                    self.tracking_mask_group,
-                    subj_id=subj_id,
-                    mask_interp="nearest",
-                )
-                tracking_mask.move_to(self.device)
-
-            def update_memory_after_removing_lines(can_continue: np.ndarray, _):
+        # These methods will be used during the loop on subjects
+        # Based on the tracker
+        def update_memory_after_removing_lines(can_continue: np.ndarray, _):
                 """
                 No recurrent hidden state to update for TCN.
                 """
                 return
-
+        def get_dirs_at_last_pos(subj_lines: List[torch.Tensor], n_last_pos):
+            # Get dirs for current subject: run model
+            nonlocal subj_idx
             
-           
-            def get_dirs_at_last_pos(current_lines: List[torch.Tensor], last_pos=None):
-                nonlocal subj_idx
+            n_last_pos = [pos[None, :] for pos in n_last_pos]
+            subj_dict = {subj_idx: slice(0, len(n_last_pos))}
+            subj_inputs = self.batch_loader.load_batch_inputs(n_last_pos,
+                                                              subj_dict)
+            model_outputs, subj_hidden_states,_ = self.model(
+                subj_inputs, subj_lines)
+
+            next_dirs = self.model.get_tracking_directions(
+                model_outputs, algo='det', eos_stopping_thresh=0.5)
+            
+            
+            return next_dirs
+
+        # Running the propagation separately for each subject
+        # (because they all need their own tracking mask)
+        final_lines = []
+        i = -1
+        for subj_idx, subj_line_idx_slice in ids_per_subj.items():
+            i += 1
+            # Load the subject's tracking mask
+            with h5py.File(self.batch_loader.dataset.hdf5_file, 'r'
+                           ) as hdf_handle:
+                subj_id = self.batch_loader.context_subset.subjects[subj_idx]
+                logging.debug("Loading subj {} ({})'s tracking mask."
+                              .format(subj_idx, subj_id))
+                tracking_mask, _ = prepare_tracking_mask(
+                    hdf_handle, self.tracking_mask_group, subj_id=subj_id,
+                    mask_interp='nearest')
+                tracking_mask.move_to(self.device)
+
+            # Propagates all lines for this subject
+            final_lines.extend(propagate_multiple_lines(
+                lines[subj_line_idx_slice], update_memory_after_removing_lines,
+                get_next_dirs=get_dirs_at_last_pos, theta=theta,
+                step_size=self.model.step_size, verify_opposite_direction=False,
+                mask=tracking_mask, max_nbr_pts=max_nbr_pts,
+                append_last_point=False, normalize_directions=True))
         
-                context_len = getattr(self.model, "context_len", None)
-                assert isinstance(context_len, int) and context_len > 0, \
-                    "Model.context_len must be a positive integer for TCN tracking."
-
-                hist_lines = [
-                    line[-context_len:] if len(line) > context_len else line
-                    for line in current_lines
-                ]
-
-                assert all(len(line) > 0 for line in hist_lines), \
-                    "All streamlines must be non-empty."
-
-                subj_dict = {subj_idx: slice(0, len(hist_lines))}
-                subj_inputs = self.batch_loader.load_batch_inputs(hist_lines, subj_dict)
-
-                with torch.no_grad():
-                    flat_outputs, _, _ = self.model(
-                        subj_inputs,
-                        input_streamlines=hist_lines
-                    )
-
-                    lengths = torch.tensor(
-                        [len(line) for line in hist_lines],
-                        device=flat_outputs.device,
-                        dtype=torch.long
-                    )
-
-                    expected_n = int(lengths.sum().item())
-                    assert flat_outputs.shape[0] == expected_n, \
-                        f"Expected {expected_n} outputs, got {flat_outputs.shape[0]}."
-
-                    last_indices = torch.cumsum(lengths, dim=0) - 1
-                    last_outputs = flat_outputs[last_indices]
-
-                    next_dirs = self.model.get_tracking_directions(
-                        last_outputs,
-                        algo="det",
-                        eos_stopping_thresh=0.5
-                    )
-
-                return next_dirs                                                  
-            propagated_lines = propagate_multiple_lines(
-                subj_lines,
-                update_memory_after_removing_lines=update_memory_after_removing_lines,
-                get_next_dirs=get_dirs_at_last_pos,
-                theta=theta,
-                step_size=self.model.step_size,
-                verify_opposite_direction=False,
-                mask=tracking_mask,
-                max_nbr_pts=max_nbr_pts,
-                append_last_point=False,
-                normalize_directions=True,
-            )
-
-            for line in propagated_lines:
-                if isinstance(line, np.ndarray):
-                    line = torch.as_tensor(
-                        line, dtype=torch.float32, device=self.device
-                    )
-                elif isinstance(line, torch.Tensor):
-                    line = line.to(self.device, dtype=torch.float32)
-                else:
-                    line = torch.as_tensor(
-                        line, dtype=torch.float32, device=self.device
-                    )
-
-                final_lines.append(line)
-
         return final_lines
+
+    
