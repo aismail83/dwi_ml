@@ -580,9 +580,6 @@ class ModelWithDirectionGetter(MainModelAbstract):
         )
         total_loss = loss_dir
 
-        # Optional bundle loss
-        if (bundle_logits is None) != (bundle_ids is None):
-            raise ValueError("Either both bundle_logits and bundle_ids must be provided, or neither.")
         if bundle_logits is not None and bundle_ids is not None:
             loss_bundle = self.compute_bundle_loss(bundle_logits, bundle_ids)
             total_loss = total_loss + lambda_bundle * loss_bundle

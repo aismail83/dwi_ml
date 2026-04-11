@@ -192,11 +192,12 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
         # Ex: 1 segment = seed + 1 point = 2 points = s[0:2]
         lines = [s[0:min(len(s), self.tracking_phase_nb_segments_init + 1), :]
                  for s in targets]
-
+        
         # Propagation: no backward tracking.
         previous_context = self.model.context
         self.model.set_context('tracking')
         lines = self.propagate_multiple_lines(lines, ids_per_subj)
+        
         self.model.set_context(previous_context)
 
         # 1. Final distance compared to expected point.
@@ -231,7 +232,7 @@ class DWIMLTrainerOneInputWithGVPhase(DWIMLTrainerOneInput):
                 nb_blocs = connectivity_nb_blocs[i]
                 labels = connectivity_labels[i]
                 _lines = lines[ids_per_subj[subj]]
-
+                
                 # Move to cpu, numpy now.
                 _lines = [line.cpu().numpy() for line in _lines]
 

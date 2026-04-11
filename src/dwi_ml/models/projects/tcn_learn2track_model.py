@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import PackedSequence, pack_sequence, pad_sequence
 from torch.nn.utils.rnn import invert_permutation
-
+from dwi_ml.data.processing.space.neighborhood import unflatten_neighborhood
 from dwi_ml.data.processing.streamlines.post_processing import (
     compute_directions, normalize_directions, compute_n_previous_dirs
 )
@@ -406,7 +406,7 @@ class TCNLearn2TrackModel(
 
     def forward(self,
                 x: List[torch.Tensor],
-                input_streamlines: List[torch.Tensor] = None,
+                input_streamlines: List[torch.Tensor] =None,
                 bundle_ids: torch.Tensor = None,
                 hidden_recurrent_states: List = None,
                 return_hidden: bool = False,
@@ -433,7 +433,7 @@ class TCNLearn2TrackModel(
         unsorted_indices = None
         sorted_indices = None
 
-        if self.context != 'tracking':
+        if  not self.context == 'tracking':
             sort_lengths = torch.as_tensor([len(s) for s in x])
             _, sorted_indices = torch.sort(sort_lengths, descending=True)
             unsorted_indices = invert_permutation(sorted_indices)
@@ -510,8 +510,6 @@ class TCNLearn2TrackModel(
         # Input embedding
         # -------------------------
         if self.input_embedding_key == 'cnn_embedding':
-            from dwi_ml.data.processing.space.neighborhood import \
-                unflatten_neighborhood
             x_data = unflatten_neighborhood(
                 x_data, self.neighborhood_vectors,
                 self.neighborhood_type, self.neighborhood_radius,
@@ -564,55 +562,16 @@ class TCNLearn2TrackModel(
         # -------------------------
         # BLOCK 1
         # -------------------------
+        
         block1_in = padded_x1.permute(0, 2, 1).contiguous()      # (B, F1, T)
         block1_out = self.block1(block1_in, mask)                # (B, H1, T)
         block1_out = block1_out.permute(0, 2, 1).contiguous()    # (B, T, H1)
-
-        # -------------------------
-        # Bundle classification per point
-        # -------------------------
-        bundle_logits = None
-        if self.bundle_classifier is not None:
-            bundle_logits = self.bundle_classifier(block1_out)    # (B, T, Cb)
-            bundle_logits = bundle_logits * mask.unsqueeze(-1).float()
-
-        # -------------------------
-        # BLOCK 2 INPUT
-        # z^(2) = [x^(1) ; y_bundle]
-        # -------------------------
-        if bundle_logits is not None and bundle_logits.shape[-1] > 0:
-            block2_in = torch.cat((padded_x1, bundle_logits), dim=-1)
-        else:
-            block2_in = padded_x1
-
-        block2_in = block2_in * mask.unsqueeze(-1).float()
-
-        if block2_in.shape[-1] != self.block2_input_size:
-            raise ValueError(
-                f"Wrong feature size before Block 2: expected "
-                f"{self.block2_input_size}, got {block2_in.shape[-1]}."
-            )
-
-        block2_in = block2_in.permute(0, 2, 1).contiguous()      # (B, F2, T)
-        block2_out = self.block2(block2_in, mask)                # (B, H2, T)
-        block2_out = block2_out.permute(0, 2, 1).contiguous()    # (B, T, H2)
-        bundle_logits1=None
-        if self.bundle_classifier is not None:
-            bundle_logits1 = self.bundle_classifier(block2_out)    # (B, T, Cb)
-            bundle_logits1 = bundle_logits1 * mask.unsqueeze(-1).float()
-        if bundle_logits1 is not None and bundle_logits1.shape[-1] > 0:
-            block3_in = torch.cat((padded_x1, bundle_logits1), dim=-1)
-        else:
-            # Si pas de logits, vous pouvez aussi caténer avec rien, mais mieux de garder block2_out
-            block3_in = block2_out
-
-        block3_in = block3_in.permute(0, 2, 1).contiguous()      # (B, F2, T)
-        block3_out = self.block3(block3_in, mask)                # (B, H2, T)
-        block3_out = block3_out.permute(0, 2, 1).contiguous()    # (B, T, H2)
+        
+        bundle_logits=None
         # -------------------------
         # Direction getter
         # -------------------------
-        flat_out = self._flatten_time_major(block3_out, batch_sizes)
+        flat_out = self._flatten_time_major(block1_out, batch_sizes)
 
         assert flat_out.shape[-1] == self.direction_getter.input_size, \
             "Expecting input to direction getter of size {}. Got {}.".format(
@@ -620,6 +579,7 @@ class TCNLearn2TrackModel(
             )
 
         model_outputs = self.direction_getter(flat_out)
+       
 
         # -------------------------
         # Bundle logits per line
@@ -638,7 +598,7 @@ class TCNLearn2TrackModel(
         # -------------------------
         # Unpack model outputs for non-tracking mode
         # -------------------------
-        if self.context != 'tracking':
+        if not self.context == 'tracking':
             if 'gaussian' in self.dg_key or 'fisher' in self.dg_key:
                 x1, x2 = model_outputs
 
@@ -657,6 +617,7 @@ class TCNLearn2TrackModel(
                 model_outputs = [model_outputs[i] for i in unsorted_indices]
 
         out_hidden_recurrent_states = None if not return_hidden else None
+        
         return model_outputs, out_hidden_recurrent_states, bundle_logits_per_line
 
     def take_lines_in_hidden_state(self, hidden_states, lines_to_keep):

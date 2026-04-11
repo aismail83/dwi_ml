@@ -2,12 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-Train a TCN-GAT model for tractography.
+Train a TCN model for tractography.
 """
 
 import argparse
 import gc
-import inspect
 import logging
 import os
 import warnings
@@ -23,7 +22,6 @@ from scilpy.io.utils import (
 )
 
 from dwi_ml.data.dataset.utils import prepare_multisubjectdataset
-from dwi_ml.experiment_utils.prints import format_dict_to_str
 from dwi_ml.experiment_utils.timer import Timer
 from dwi_ml.io_utils import add_memory_args
 
@@ -105,9 +103,9 @@ memory_utils.log_gpu_per_tensor = _safe_log_gpu_per_tensor
 trainers_module.log_gpu_per_tensor = _safe_log_gpu_per_tensor
 
 
-def add_model_args_tcn_gat(parser):
+def add_model_args_tcn(parser):
     """
-    Add command-line arguments specific to the TCN-GAT model.
+    Add command-line arguments specific to the TCN model.
     """
     parser.add_argument(
         "--tcn_hidden_size",
@@ -141,7 +139,7 @@ def prepare_arg_parser():
     Build and return the main argument parser.
     """
     parser = argparse.ArgumentParser(
-        description="Train a TCN-GAT model for tractography."
+        description="Train a TCN model for tractography."
     )
 
     add_mandatory_args_experiment_and_hdf5_path(parser)
@@ -150,12 +148,8 @@ def prepare_arg_parser():
     add_training_args(parser, add_a_tracking_validation_phase=True)
     add_memory_args(parser, add_lazy_options=True, add_rng=True)
     add_verbose_arg(parser)
-
-    # Base Learn2Track arguments
     add_model_args(parser)
-
-    # TCN-GAT specific arguments
-    add_model_args_tcn_gat(parser)
+    add_model_args_tcn(parser)
 
     return parser
 
@@ -180,30 +174,11 @@ def init_from_args(args, sub_loggers_level):
         log_level=sub_loggers_level,
     )
 
-    # Temporary abstract model for loader initialization
-    model_abstract = MainModelAbstract(
-        experiment_name=args.experiment_name,
-        subset=dataset.training_set,
-        step_size=args.step_size,
-        compress_lines=args.compress_th,
-    )
-
-    group_loader = prepare_batch_loader(
-        dataset,
-        model_abstract,
-        args,
-        sub_loggers_level,
-    )
-
-    
-
     input_group_idx = dataset.volume_groups.index(args.input_group_name)
     args.nb_features = dataset.nb_features[input_group_idx]
     dg_args = check_args_direction_getter(args)
 
-    with Timer("\n\nPreparing TCN-GAT model", newline=True, color="yellow"):
-        
-
+    with Timer("\n\nPreparing TCN model", newline=True, color="yellow"):
         model = TCNLearn2TrackModel(
             experiment_name=args.experiment_name,
             step_size=args.step_size,
@@ -230,55 +205,43 @@ def init_from_args(args, sub_loggers_level):
             # Direction getter
             dg_key=args.dg_key,
             dg_args=dg_args,
+
             # Neighborhood
             neighborhood_type=args.neighborhood_type,
             neighborhood_radius=args.neighborhood_radius,
             neighborhood_resolution=args.neighborhood_resolution,
 
             # Bundle options
-            use_bundle_ids=_safe_getattr(group_loader, "use_bundle_ids", False),
-            bundle_emb_dim=_safe_getattr(group_loader, "bundle_emb_dim", None),
+            # Bundle options
+            use_bundle_ids=args.use_bundle_ids,
+            bundle_emb_dim=args.bundle_emb_dim,
             num_bundles=args.num_bundles,
-            predict_bundle_ids=_safe_getattr(
-                group_loader, "predict_bundle_ids", False
-            ),
-
+            predict_bundle_ids=args.predict_bundle_ids,
             # Misc
             dropout=args.dropout,
             log_level=sub_loggers_level,
         )
 
-        logging.info(
-            "Imported TCNGATLearn2TrackModel from: %s",
-            inspect.getfile(TCNLearn2TrackModel),
-        )
-
-        logging.info(
-            "Class has params_for_checkpoint: %s",
-            hasattr(TCNLearn2TrackModel, "params_for_checkpoint"),
-        )
-
-        logging.info(
-            "Instance has params_for_checkpoint: %s",
-            hasattr(model, "params_for_checkpoint"),
-        )
-
-        if hasattr(model, "params_for_checkpoint"):
-            logging.info(
-                "TCN-GAT model final parameters: %s",
-                format_dict_to_str(model.params_for_checkpoint),
-            )
-        else:
-            logging.warning("Model has no params_for_checkpoint attribute.")
-
-        if hasattr(model, "computed_params_for_display"):
-            logging.info(
-                "Computed parameters: %s",
-                format_dict_to_str(model.computed_params_for_display),
-            )
-
     batch_sampler = prepare_batch_sampler(dataset, args, sub_loggers_level)
     batch_loader = prepare_batch_loader(dataset, model, args, sub_loggers_level)
+
+    # Keep useful behavior from the old Learn2Track script
+    if (
+        _safe_getattr(args, "use_bundle_ids", False)
+        or _safe_getattr(args, "predict_bundle_ids", False)
+    ):
+        model.num_bundles = args.num_bundles
+
+    if _safe_getattr(args, "predict_bundle_ids", False):
+        if hasattr(model, "compute_bundles_class_weights"):
+            model.bundle_class_weights = model.compute_bundles_class_weights(
+                dataset.training_set,
+                num_classes=args.num_bundles,
+            )
+        else:
+            model.bundle_class_weights = None
+    else:
+        model.bundle_class_weights = None
 
     with Timer("\n\nPreparing trainer", newline=True, color="red"):
         learning_rates = format_lr(args.learning_rate)
@@ -317,12 +280,6 @@ def init_from_args(args, sub_loggers_level):
             use_gpu=args.use_gpu,
             log_level=args.verbose,
         )
-
-        if hasattr(trainer, "params_for_checkpoint"):
-            logging.info(
-                "Trainer params: %s",
-                format_dict_to_str(trainer.params_for_checkpoint),
-            )
 
     return trainer
 
