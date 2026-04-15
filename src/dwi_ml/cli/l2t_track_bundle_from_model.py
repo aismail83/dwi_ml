@@ -182,9 +182,9 @@ def predict_bundles_for_streamlines(streamlines, tracker, batch_size=64):
                 inputs,
                 input_streamlines=batch_lines,
                 bundle_ids=None,
-                hidden_recurrent_states=None,
-                return_hidden=False,
-                point_idx=None
+                hidden_recurrent_states=True,
+                return_hidden=True,
+                point_idx=-1
             )
 
             # Ensure model predicts bundles

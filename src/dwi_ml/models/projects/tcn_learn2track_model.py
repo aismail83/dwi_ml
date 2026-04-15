@@ -185,7 +185,6 @@ class TCNLearn2TrackModel(
                  tcn_hidden_size: int,
                  tcn_num_layers: int,
                  tcn_kernel_size: int,
-
                  # DIRECTION GETTER
                  dg_key: str,
                  dg_args: Union[dict, None],
@@ -293,7 +292,7 @@ class TCNLearn2TrackModel(
         if self.nb_previous_dirs > 0:
             self.input_size += self.prev_dirs_embedded_size
 
-        dilations = (1, 3, 6, 12, 24)
+        dilations = (1, 3, 6, 12, 24,56,128)
 
         # -------------------------
         # BLOCK 1
@@ -331,7 +330,7 @@ class TCNLearn2TrackModel(
         )
         self.block3_input_size = self.block2.output_size
         if self.bundle_classifier is not None:
-            self.block3_input_size += self.num_bundles
+            self.block3_input_size += self.num_bundlesscil_score_ismrm_Renauld2023.sh
 
         self.block3 = TCNSubBlock(
             in_channels=self.block3_input_size,
