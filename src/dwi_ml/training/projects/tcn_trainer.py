@@ -53,13 +53,26 @@ class TCNLearn2TrackTrainer(DWIMLTrainerOneInputWithGVPhase):
         def get_dirs_at_last_pos(subj_lines: List[torch.Tensor], n_last_pos):
             nonlocal subj_idx
 
-            n_last_pos = [pos[None, :] for pos in n_last_pos]
-            subj_dict = {subj_idx: slice(0, len(n_last_pos))}
-            subj_inputs = self.batch_loader.load_batch_inputs(n_last_pos, subj_dict)
+            # On ignore n_last_pos comme entrée principale :
+            # le TCN a besoin d'une séquence, pas d'un seul point.
+            ctx = self.model.context_len
 
+            # Fenêtre causale sur chaque streamline partielle
+            ctx_lines = [
+                line[-ctx:, :] if len(line) > ctx else line
+                for line in subj_lines
+            ]
+            
+            subj_dict = {subj_idx: slice(0, len(ctx_lines))}
+
+            # Charger les features sur toute la fenêtre de contexte
+            subj_inputs = self.batch_loader.load_batch_inputs(ctx_lines, subj_dict)
+
+            # Le modèle prédit au dernier point de chaque séquence
             model_outputs, _, _ = self.model(
-                subj_inputs, subj_lines, point_idx=-1
+                subj_inputs, ctx_lines, point_idx=-1
             )
+
             next_dirs = self.model.get_tracking_directions(
                 model_outputs, algo='det', eos_stopping_thresh=0.5
             )

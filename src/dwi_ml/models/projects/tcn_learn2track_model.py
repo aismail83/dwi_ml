@@ -292,66 +292,25 @@ class TCNLearn2TrackModel(
         if self.nb_previous_dirs > 0:
             self.input_size += self.prev_dirs_embedded_size
 
-        dilations = (1, 3, 6, 12, 24,56,128)
+        self.dilations = (1, 3, 6, 12, 24,56)
 
         # -------------------------
         # BLOCK 1
         # -------------------------
-        self.block1 = TCNSubBlock(
+        self.tcn = TCNSubBlock(
             in_channels=self.input_size,
             hidden_channels=tcn_hidden_size,
             kernel_size=tcn_kernel_size,
-            dilations=dilations,
+            dilations=self.dilations,
             dropout=dropout
         )
 
-        # Point-wise bundle classifier
-        if self.predict_bundle_ids and self.num_bundles > 0:
-            self.bundle_classifier = nn.Linear(
-                self.block1.output_size, self.num_bundles
-            )
-        else:
-            self.bundle_classifier = None
 
-        # -------------------------
-        # BLOCK 2
-        # input to block 2 = [x^(1) ; y_bundle]
-        # -------------------------
-        self.block2_input_size = self.input_size
-        if self.bundle_classifier is not None:
-            self.block2_input_size += self.num_bundles
+        self.context_len = 1 + (tcn_kernel_size - 1) * sum(self.dilations)
 
-        self.block2 = TCNSubBlock(
-            in_channels=self.block2_input_size,
-            hidden_channels=tcn_hidden_size,
-            kernel_size=tcn_kernel_size,
-            dilations=dilations,
-            dropout=dropout
-        )
-        self.block3_input_size = self.block2.output_size
-        if self.bundle_classifier is not None:
-            self.block3_input_size += self.num_bundlesscil_score_ismrm_Renauld2023.sh
-
-        self.block3 = TCNSubBlock(
-            in_channels=self.block3_input_size,
-            hidden_channels=tcn_hidden_size,
-            kernel_size=tcn_kernel_size,
-            dilations=dilations,
-            dropout=dropout
-        )
-        self.context_len = 1 + (tcn_kernel_size - 1) * (
-            2 ** tcn_num_layers - 1
-        )
-
-        self.ssl_head = nn.Sequential(
-            nn.Linear(self.block2.output_size, self.block2.output_size),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(self.block2.output_size, 3)
-        )
-
+        
         # Direction getter uses Block 2 output
-        self.instantiate_direction_getter(self.block2.output_size)
+        self.instantiate_direction_getter(self.tcn.output_size)
 
     def set_context(self, context):
         assert context in ['training', 'validation', 'tracking', 'visu',
@@ -377,9 +336,7 @@ class TCNLearn2TrackModel(
     @property
     def computed_params_for_display(self):
         p = super().computed_params_for_display
-        p['block1_output_size'] = self.block1.output_size
-        p['block2_input_size'] = self.block2_input_size
-        p['block2_output_size'] = self.block2.output_size
+        p['tcn_output_size'] = self.tcn.output_size
         return p
 
     def _flatten_time_major(self, seq_tensor, batch_sizes):
@@ -404,23 +361,15 @@ class TCNLearn2TrackModel(
         )
 
     def forward(self,
-                x: List[torch.Tensor],
-                input_streamlines: List[torch.Tensor] =None,
-                bundle_ids: torch.Tensor = None,
-                hidden_recurrent_states: List = None,
-                return_hidden: bool = False,
-                point_idx: int = None):
-        """
-        Returns
-        -------
-        model_outputs
-            Direction getter outputs.
-        out_hidden_recurrent_states
-            Always None (kept for API compatibility).
-        bundle_logits_per_line
-            Point-wise bundle logits, one tensor per streamline.
-        """
+            x: List[torch.Tensor],
+            input_streamlines: List[torch.Tensor] = None,
+            bundle_ids: torch.Tensor = None,
+            hidden_recurrent_states: List = None,
+            return_hidden: bool = False,
+            point_idx: int = None):
+
         del hidden_recurrent_states
+        dev = next(self.parameters()).device
 
         if self.context is None:
             raise ValueError("Please set context before usage.")
@@ -432,7 +381,8 @@ class TCNLearn2TrackModel(
         unsorted_indices = None
         sorted_indices = None
 
-        if  not self.context == 'tracking':
+        # Training / validation: sort by length
+        if self.context != 'tracking':
             sort_lengths = torch.as_tensor([len(s) for s in x])
             _, sorted_indices = torch.sort(sort_lengths, descending=True)
             unsorted_indices = invert_permutation(sorted_indices)
@@ -440,37 +390,9 @@ class TCNLearn2TrackModel(
             if input_streamlines is not None:
                 input_streamlines = [input_streamlines[i] for i in sorted_indices]
 
-        dev = next(self.parameters()).device
-
-        # -------------------------
-        # Bundle ids for optional embedding
-        # -------------------------
-        if self.use_bundle_ids:
-            if self.context == 'tracking' or bundle_ids is None:
-                bundle_ids = torch.zeros(len(x), device=dev, dtype=torch.long)
-            else:
-                bundle_ids = torch.as_tensor(
-                    bundle_ids, device=dev, dtype=torch.long
-                ).view(-1)
-
-            if bundle_ids.numel() == 1 and len(x) > 1:
-                bundle_ids = bundle_ids.expand(len(x))
-
-            if self.context != 'tracking':
-                bundle_ids = bundle_ids[sorted_indices.to(bundle_ids.device)]
-
-            if bundle_ids.numel() != len(x):
-                raise ValueError(
-                    f"bundle_ids must have one id per streamline: got "
-                    f"{bundle_ids.numel()} for {len(x)} streamlines "
-                    f"(context={self.context})."
-                )
-        else:
-            bundle_ids = None
-
-        # -------------------------
-        # Previous directions
-        # -------------------------
+        # -----------------------------------
+        # Previous directions: ALWAYS full sequence for TCN
+        # -----------------------------------
         n_prev_dirs = None
         if self.nb_previous_dirs > 0:
             if input_streamlines is None:
@@ -482,32 +404,24 @@ class TCNLearn2TrackModel(
             if self.normalize_prev_dirs:
                 dirs = normalize_directions(dirs)
 
+            # Important: keep full temporal alignment for TCN
             n_prev_dirs = compute_n_previous_dirs(
-                dirs, self.nb_previous_dirs, point_idx=point_idx
+                dirs, self.nb_previous_dirs, point_idx=None
             )
             n_prev_dirs = pack_sequence(n_prev_dirs, enforce_sorted=False)
             n_prev_dirs = self.prev_dirs_embedding(n_prev_dirs.data)
             n_prev_dirs = self.embedding_dropout(n_prev_dirs)
 
-        # -------------------------
-        # Optional streamline-level bundle embedding
-        # -------------------------
-        if self.use_bundle_ids and bundle_ids is not None:
-            b = self.bundle_emb(bundle_ids)
-            b_list = [b[i].expand(x[i].shape[0], -1) for i in range(len(x))]
-        else:
-            b_list = None
-
-        # -------------------------
+        # -----------------------------------
         # Pack input
-        # -------------------------
+        # -----------------------------------
         x_packed = pack_sequence(x, enforce_sorted=False)
         batch_sizes = x_packed.batch_sizes
         x_data = x_packed.data
 
-        # -------------------------
+        # -----------------------------------
         # Input embedding
-        # -------------------------
+        # -----------------------------------
         if self.input_embedding_key == 'cnn_embedding':
             x_data = unflatten_neighborhood(
                 x_data, self.neighborhood_vectors,
@@ -519,11 +433,9 @@ class TCNLearn2TrackModel(
         x_data = self.embedding_dropout(x_data)
 
         if n_prev_dirs is not None:
+            assert x_data.shape[0] == n_prev_dirs.shape[0], \
+                f"x_data: {x_data.shape}, n_prev_dirs: {n_prev_dirs.shape}"
             x_data = torch.cat((x_data, n_prev_dirs), dim=-1)
-
-        if b_list is not None:
-            b_packed = pack_sequence(b_list, enforce_sorted=False)
-            x_data = torch.cat((x_data, b_packed.data), dim=-1)
 
         expected_size = self.input_size
         got_size = x_data.shape[-1]
@@ -533,7 +445,7 @@ class TCNLearn2TrackModel(
                 f"{expected_size}, got {got_size}."
             )
 
-        # x^(1): rebuild per-sequence list after embedding
+        # Rebuild per-sequence list after embedding
         seq_features = faster_unpack_sequence(
             PackedSequence(
                 x_data,
@@ -543,9 +455,9 @@ class TCNLearn2TrackModel(
             )
         )
 
-        # -------------------------
+        # -----------------------------------
         # Pad sequences
-        # -------------------------
+        # -----------------------------------
         padded_x1 = pad_sequence(seq_features, batch_first=True)  # (B, T, F1)
         batch_size, max_len, _ = padded_x1.shape
 
@@ -558,67 +470,92 @@ class TCNLearn2TrackModel(
             seq_lengths.append(cur_len)
             mask[i, :cur_len] = True
 
-        # -------------------------
-        # BLOCK 1
-        # -------------------------
-        
-        block1_in = padded_x1.permute(0, 2, 1).contiguous()      # (B, F1, T)
-        block1_out = self.block1(block1_in, mask)                # (B, H1, T)
-        block1_out = block1_out.permute(0, 2, 1).contiguous()    # (B, T, H1)
-        
-        bundle_logits=None
-        # -------------------------
-        # Direction getter
-        # -------------------------
-        flat_out = self._flatten_time_major(block1_out, batch_sizes)
+        # -----------------------------------
+        # TCN block
+        # -----------------------------------
+        tcn_in = padded_x1.permute(0, 2, 1).contiguous()   # (B, F, T)
+        tcn_out = self.tcn(tcn_in)                   # (B, H, T)
+        tcn_out = tcn_out.permute(0, 2, 1).contiguous()   # (B, T, H)
 
-        assert flat_out.shape[-1] == self.direction_getter.input_size, \
+        # -----------------------------------
+        # Direction getter input
+        # -----------------------------------
+        if point_idx is None:
+            dg_in = self._flatten_time_major(tcn_out, batch_sizes)
+        else:
+            lengths_t = torch.as_tensor(seq_lengths, device=dev, dtype=torch.long)
+
+            if point_idx < 0:
+                gather_idx = lengths_t + point_idx   # e.g. -1 => last valid point
+            else:
+                gather_idx = torch.full(
+                    (batch_size,), point_idx, device=dev, dtype=torch.long
+                )
+
+            gather_idx = torch.clamp(gather_idx, min=0)
+            gather_idx = torch.minimum(gather_idx, lengths_t - 1)
+
+            dg_in = tcn_out[
+                torch.arange(batch_size, device=dev),
+                gather_idx,
+                :
+            ]   # (B, H)
+
+        assert dg_in.shape[-1] == self.direction_getter.input_size, \
             "Expecting input to direction getter of size {}. Got {}.".format(
-                self.direction_getter.input_size, flat_out.shape[-1]
+                self.direction_getter.input_size, dg_in.shape[-1]
             )
 
-        model_outputs = self.direction_getter(flat_out)
-       
+        model_outputs = self.direction_getter(dg_in)
 
-        # -------------------------
-        # Bundle logits per line
-        # -------------------------
-        bundle_logits_per_line = None
-        if bundle_logits is not None:
-            bundle_logits_per_line = [
-                bundle_logits[i, :seq_lengths[i], :]
-                for i in range(batch_size)
-            ]
-            if self.context != 'tracking' and unsorted_indices is not None:
-                bundle_logits_per_line = [
-                    bundle_logits_per_line[i] for i in unsorted_indices
+        # -----------------------------------
+        # Tracking: return raw tensor (one output per active streamline)
+        # -----------------------------------
+        if self.context == 'tracking':
+            return model_outputs, None, None
+
+        # -----------------------------------
+        # Non-tracking: restore original structure
+        # -----------------------------------
+        if point_idx is not None:
+            if 'gaussian' in self.dg_key or 'fisher' in self.dg_key:
+                x1, x2 = model_outputs
+                model_outputs = (
+                    [x1[i].unsqueeze(0) for i in unsorted_indices],
+                    [x2[i].unsqueeze(0) for i in unsorted_indices]
+                )
+            else:
+                model_outputs = [
+                    model_outputs[i].unsqueeze(0) for i in unsorted_indices
                 ]
-
-        # -------------------------
-        # Unpack model outputs for non-tracking mode
-        # -------------------------
-        if not self.context == 'tracking':
+        else:
             if 'gaussian' in self.dg_key or 'fisher' in self.dg_key:
                 x1, x2 = model_outputs
 
-                x2 = PackedSequence(x2, batch_sizes)
-                x2 = faster_unpack_sequence(x2)
-                x2 = [x2[i] for i in unsorted_indices]
+                x1 = PackedSequence(
+                    x1, batch_sizes,
+                    x_packed.sorted_indices, x_packed.unsorted_indices
+                )
+                x2 = PackedSequence(
+                    x2, batch_sizes,
+                    x_packed.sorted_indices, x_packed.unsorted_indices
+                )
 
-                x1 = PackedSequence(x1, batch_sizes)
                 x1 = faster_unpack_sequence(x1)
-                x1 = [x1[i] for i in unsorted_indices]
+                x2 = faster_unpack_sequence(x2)
 
-                model_outputs = (x1, x2)
+                model_outputs = (
+                    [x1[i] for i in unsorted_indices],
+                    [x2[i] for i in unsorted_indices]
+                )
             else:
-                model_outputs = PackedSequence(model_outputs, batch_sizes)
+                model_outputs = PackedSequence(
+                    model_outputs,
+                    batch_sizes,
+                    x_packed.sorted_indices,
+                    x_packed.unsorted_indices
+                )
                 model_outputs = faster_unpack_sequence(model_outputs)
                 model_outputs = [model_outputs[i] for i in unsorted_indices]
 
-        out_hidden_recurrent_states = None if not return_hidden else None
-        
-        return model_outputs, out_hidden_recurrent_states, bundle_logits_per_line
-
-    def take_lines_in_hidden_state(self, hidden_states, lines_to_keep):
-        del hidden_states, lines_to_keep
-        return None
+        return model_outputs, None, None
