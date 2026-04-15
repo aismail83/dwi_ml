@@ -94,7 +94,7 @@ class TCNSubBlock(nn.Module):
         in_channels: int,
         hidden_channels: int = 128,
         kernel_size: int = 6,
-        dilations=(1, 3, 6, 12, 24,56),
+        dilations=(1, 3, 6, 12, 24),
         dropout: float = 0.0
     ):
         super().__init__()
@@ -292,10 +292,10 @@ class TCNLearn2TrackModel(
         if self.nb_previous_dirs > 0:
             self.input_size += self.prev_dirs_embedded_size
 
-        self.dilations = (1, 3, 6, 12, 24,56)
+        self.dilations = (1, 3, 6, 12, 24)
 
         # -------------------------
-        # BLOCK 1
+        # BLOCK 
         # -------------------------
         self.tcn = TCNSubBlock(
             in_channels=self.input_size,
@@ -309,7 +309,7 @@ class TCNLearn2TrackModel(
         self.context_len = 1 + (tcn_kernel_size - 1) * sum(self.dilations)
 
         
-        # Direction getter uses Block 2 output
+        # Direction getter uses Block  output
         self.instantiate_direction_getter(self.tcn.output_size)
 
     def set_context(self, context):
