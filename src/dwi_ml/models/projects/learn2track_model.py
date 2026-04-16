@@ -374,7 +374,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         else:
             b_list = None
 
-        x = pack_sequence(x)
+        x = pack_sequence(x,enforce_sorted=False)
         batch_sizes = x.batch_sizes
 
         # Avoid unpacking and packing back if not needed.
