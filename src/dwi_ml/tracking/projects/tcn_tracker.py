@@ -109,34 +109,33 @@ class TCNTracker(DWIMLTrackerOneInput):
             return x.unsqueeze(0)
         else:
             raise ValueError(f"Unexpected model output shape: {tuple(x.shape)}")
+    def get_dirs_at_last_pos(self, subj_lines: list[torch.Tensor], n_last_pos):
+            subj_idx =self.subj_idx
 
-    def get_next_dirs(self, lines, n_last_pos):
-        inputs = self._prepare_inputs_at_pos(n_last_pos)
-        model_outputs = self._call_model_forward(inputs, lines)
+            # On ignore n_last_pos comme entrée principale :
+            # le TCN a besoin d'une séquence, pas d'un seul point.
+            ctx = self.model.context_len
 
-        # Common case: (dir_output, None, None)
-        if (
-            isinstance(model_outputs, tuple)
-            and len(model_outputs) == 3
-            and model_outputs[1] is None
-            and model_outputs[2] is None
-        ):
-            model_outputs = model_outputs[0]
-        print(model_outputs)
-        # Fisher-von-Mises-style outputs:
-        # possible form: (mus, kappas, eos)
-        if isinstance(model_outputs, (tuple, list)) and len(model_outputs) >= 2:
-            mus = self._to_batch_tensor(model_outputs[0])
-            kappas = self._to_batch_tensor(model_outputs[1])
-            model_outputs = (mus, kappas)
+            # Fenêtre causale sur chaque streamline partielle
+            ctx_lines = [
+                line[-ctx:, :] if len(line) > ctx else line
+                for line in subj_lines
+            ]
+            
+            subj_dict = {subj_idx: slice(0, len(ctx_lines))}
 
-        elif isinstance(model_outputs, list):
-            model_outputs = self._to_batch_tensor(model_outputs)
+            # Charger les features sur toute la fenêtre de contexte
+            subj_inputs = self.batch_loader.load_batch_inputs(ctx_lines, subj_dict)
 
-        elif isinstance(model_outputs, torch.Tensor):
-            model_outputs = self._to_batch_tensor(model_outputs)
+            # Le modèle prédit au dernier point de chaque séquence
+            model_outputs, _, _ = self.model(
+                subj_inputs, ctx_lines, point_idx=-1
+            )
 
-        next_dirs = self.model.get_tracking_directions(
-            model_outputs, self.algo, self.eos_stopping_thresh
-        )
-        return next_dirs
+            next_dirs = self.model.get_tracking_directions(
+                model_outputs, algo='det', eos_stopping_thresh=0.5
+            )
+
+            return next_dirs
+
+    
