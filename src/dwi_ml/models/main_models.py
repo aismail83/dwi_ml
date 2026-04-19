@@ -582,7 +582,6 @@ class ModelWithDirectionGetter(MainModelAbstract):
 
         if bundle_logits is not None and bundle_ids is not None:
             loss_bundle = self.compute_bundle_loss(bundle_logits, bundle_ids)
-            print(loss_bundle)
             total_loss = total_loss + lambda_bundle * loss_bundle
         return total_loss, n
     
