@@ -871,6 +871,7 @@ class DWIMLTrainer:
                     # Saving result.
                     # mean loss is a Tensor of a single value. item() converts
                     # it to float
+                    
                     self.train_loss_monitor.update(mean_loss.cpu().item(),
                                                    weight=n)
 
@@ -1274,8 +1275,25 @@ class DWIMLTrainerOneInput(DWIMLTrainer):
         # (batch loader will do it depending on training / valid)
         targets = self.batch_loader.add_noise_streamlines_loss(targets,
                                                                self.device)
-        mean_loss, n = self.model.compute_loss(model_outputs, targets,average_results=True, bundle_logits=bl_per_line,
-                                                bundle_ids=bundle_ids,
-                                               )
-    
+
+        if self.model.good_indices is not None:
+            idx = self.model.good_indices
+            idx_list = idx.tolist()
+
+            targets = [targets[i] for i in idx_list]
+
+            if bundle_ids is not None:
+                bundle_ids = bundle_ids.index_select(0, idx.to(bundle_ids.device))
+
+            if bl_per_line is not None:
+                bl_per_line = bl_per_line.index_select(0, idx.to(bl_per_line.device))
+
+        mean_loss, n = self.model.compute_loss(
+            model_outputs,
+            targets,
+            average_results=True,
+            bundle_logits=bl_per_line,
+            bundle_ids=bundle_ids,
+        )
+
         return mean_loss, n

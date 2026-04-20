@@ -516,6 +516,7 @@ class ModelWithDirectionGetter(MainModelAbstract):
         # typically, user will need to know his model output size to call
         # this with correct input size. Waiting.
         self.dg_key = dg_key
+        self.good_indices=None
         self.dg_args = dg_args or {}
         self.direction_getter = None  # type: AbstractDirectionGetterModel
         if self.dg_key not in keys_to_direction_getters.keys():

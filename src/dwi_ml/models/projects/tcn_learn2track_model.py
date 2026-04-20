@@ -1,20 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Two-block TCN model for tractography tracking.
-
-Main idea:
-- Block 1 processes the streamline sequence.
-- Block 1 predicts bundle classes point by point.
-- These point-wise bundle logits are reused as extra features for Block 2.
-- Block 2 predicts features used by the direction getter.
-
-Returns:
-    (model_outputs, hidden_states, bundle_logits_per_line)
 """
 
 import logging
 from typing import List, Optional, Union
-
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import PackedSequence, pack_sequence, pad_sequence
@@ -154,13 +144,6 @@ class TCNLearn2TrackModel(
 ):
     """
     Two-block TCN model compatible with Learn2Track-like API.
-
-    Block 1:
-        input sequence -> TCN -> bundle logits per point
-
-    Block 2:
-        input = [embedded_input ; bundle_logits_per_point]
-        -> TCN -> direction getter
     """
 
     def __init__(self,
