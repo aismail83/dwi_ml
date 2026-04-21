@@ -157,7 +157,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         self.dropout = dropout
         self.nb_cnn_filters = nb_cnn_filters
         self.kernel_size = kernel_size
-        self.good_indices=None
+
         if dropout < 0 or dropout > 1:
             raise ValueError('The dropout rate must be between 0 and 1.')
 
@@ -262,53 +262,82 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         p['stacked_RNN_output_size'] = self.rnn_model.output_size
         return p
 
-    def forward(self, x: List[torch.Tensor],
-                input_streamlines: List[torch.Tensor] = None,
+    def forward(self, x: List[torch.tensor],
+                input_streamlines: List[torch.tensor] = None,
                 bundle_ids: torch.Tensor = None,
-                hidden_recurrent_states: List = None,
-                return_hidden: bool = False,
+                hidden_recurrent_states: List = None, return_hidden=False,
                 point_idx: int = None):
-        """Run the model on a batch of sequences."""
+        """Run the model on a batch of sequences.
 
+        Parameters
+        ----------
+        x: List[torch.tensor]
+            Batch of input sequences, i.e. MRI data. Length of the list is the
+            number of streamlines in the batch. Each tensor is of size
+            [nb_points, nb_features]. During training, should be the length of
+            the streamlines minus one (last point is not used). During
+            tracking, nb_points should be one; the current point.
+        input_streamlines: List[torch.tensor]
+            Batch of streamlines. Only used if previous directions are added to
+            the model. Used to compute directions; its last point will not be
+            used.
+        bundle_ids: torch.Tensor, optional
+            Tensor containing one bundle ID per streamline in the batch.
+            Only used if the model was built with use_bundle_ids=True.
+            Shape: [nb_streamlines].
+        hidden_recurrent_states : list[states]
+            The current hidden states of the (stacked) RNN model.
+        return_hidden: bool
+        point_idx: int
+
+        Returns
+        -------
+        If return_hidden is False:
+            x, bundle_logits_per_line
+        If return_hidden is True:
+            x, out_hidden_recurrent_states, bundle_logits_per_line
+        """
+        # Reminder.
+        # Correct interpolation and management of points should be done before.
         if self.context is None:
             raise ValueError("Please set context before usage.")
-
+        
+        # Right now input is always flattened (interpolation is implemented
+        # that way). For CNN, we will rearrange it ourselves.
         assert x[0].shape[-1] == self.raw_input_size, \
             "Not the expected input size! Should be {} (i.e. {} features for " \
             "each of the {} neighbors), but got {} (input shape {})." \
             .format(self.raw_input_size, self.nb_features, self.nb_neighbors,
                     x[0].shape[-1], x[0].shape)
 
-        self.good_indices = None
-
+        # Making sure we can use default 'enforce_sorted=True' with packed
+        # sequences.
         unsorted_indices = None
         sorted_indices = None
-        if self.context != 'tracking':
+        if not self.context =='tracking':
+            # Ordering streamlines per length.
             lengths = torch.as_tensor([len(s) for s in x])
             _, sorted_indices = torch.sort(lengths, descending=True)
             unsorted_indices = invert_permutation(sorted_indices)
-
             x = [x[i] for i in sorted_indices]
             if input_streamlines is not None:
-                input_streamlines = [input_streamlines[i] for i in sorted_indices]
+                input_streamlines = [input_streamlines[i]
+                                     for i in sorted_indices]
 
+        # Handle bundle IDs.
         dev = next(self.parameters()).device
 
-        # -------------------------
-        # Bundle ids
-        # -------------------------
         if self.use_bundle_ids:
             if self.context == 'tracking' or bundle_ids is None:
                 bundle_ids = torch.zeros(len(x), device=dev, dtype=torch.long)
             else:
                 bundle_ids = torch.as_tensor(
-                    bundle_ids, device=dev, dtype=torch.long
-                ).view(-1)
+                    bundle_ids, device=dev, dtype=torch.long).view(-1)
 
             if bundle_ids.numel() == 1 and len(x) > 1:
                 bundle_ids = bundle_ids.expand(len(x))
 
-            if self.context != 'tracking':
+            if not self.context == 'tracking':
                 bundle_ids = bundle_ids[sorted_indices.to(bundle_ids.device)]
 
             if bundle_ids.numel() != len(x):
@@ -320,232 +349,133 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         else:
             bundle_ids = None
 
-        # -------------------------
-        # Previous directions
-        # -------------------------
+        # ==== 0. Previous dirs.
         n_prev_dirs = None
         if self.nb_previous_dirs > 0:
-            if input_streamlines is None:
-                raise ValueError(
-                    "input_streamlines must be provided when nb_previous_dirs > 0"
-                )
-
             dirs = compute_directions(input_streamlines)
             if self.normalize_prev_dirs:
                 dirs = normalize_directions(dirs)
 
+            # ==== 1. Previous dirs embedding ====
             n_prev_dirs = compute_n_previous_dirs(
-                dirs, self.nb_previous_dirs, point_idx=point_idx
-            )
+                dirs, self.nb_previous_dirs, point_idx=point_idx)
             n_prev_dirs = pack_sequence(n_prev_dirs, enforce_sorted=False)
+            # Shape: (nb_points - 1) per streamline x (3 per prev dir)
             n_prev_dirs = self.prev_dirs_embedding(n_prev_dirs.data)
             n_prev_dirs = self.embedding_dropout(n_prev_dirs)
 
-        # -------------------------
-        # Pack inputs
-        # -------------------------
+        # ==== 2. Inputs embedding ====
+        # If bundle conditioning is enabled, compute bundle embeddings.
+        # Each streamline receives its corresponding bundle embedding,
+        # expanded to match its number of points.
+        if self.use_bundle_ids and bundle_ids is not None:
+            b = self.bundle_emb(bundle_ids)  # [N, emb_dim]
+            b_list = [b[i].expand(x[i].shape[0], -1) for i in range(len(x))]
+        else:
+            b_list = None
+
         x = pack_sequence(x)
+        batch_sizes = x.batch_sizes
 
-        # -------------------------
-        # Input embedding
-        # -------------------------
-        if self.nb_previous_dirs > 0 or not isinstance(self.input_embedding_layer, NoEmbedding):
-            x_data = x.data
+        # Avoid unpacking and packing back if not needed.
+        if self.nb_previous_dirs > 0 or not isinstance(
+                self.input_embedding_layer, NoEmbedding):
+            x = x.data
 
+            # Embedding. Shape of inputs: nb_pts_total * embedded_size
             if self.input_embedding_key == 'cnn_embedding':
-                x_data = unflatten_neighborhood(
-                    x_data,
-                    self.neighborhood_vectors,
-                    self.neighborhood_type,
-                    self.neighborhood_radius,
-                    self.neighborhood_resolution
-                )
+                # We need to reshape flattened inputs into a neighborhood.
+                x = unflatten_neighborhood(
+                    x, self.neighborhood_vectors, self.neighborhood_type,
+                    self.neighborhood_radius, self.neighborhood_resolution)
 
-            x_data = self.input_embedding_layer(x_data)
-            x_data = self.embedding_dropout(x_data)
+            x = self.input_embedding_layer(x)
+            x = self.embedding_dropout(x)
 
+            # ==== 3. Concat with previous dirs ====
             if self.nb_previous_dirs > 0:
-                x_data = torch.cat((x_data, n_prev_dirs), dim=-1)
+                x = torch.cat((x, n_prev_dirs), dim=-1)
 
-            x = PackedSequence(
-                x_data,
-                x.batch_sizes,
-                x.sorted_indices,
-                x.unsorted_indices
-            )
+            # Rebuild packed sequence.
+            x = PackedSequence(x, batch_sizes)
 
-        # -------------------------
-        # RNN / main sequence model
-        # -------------------------
-        final_ref = x
-        bundle_logits_per_line = None
+        # Pack bundle embeddings with same order/lengths
+        if self.use_bundle_ids and b_list is not None:
+            x_data = x.data
+            b_packed = pack_sequence(b_list, enforce_sorted=False)
+            x_data = torch.cat((x_data, b_packed.data), dim=-1)
+            x = PackedSequence(x_data, batch_sizes)
 
-        def _filter_hidden(h, idx):
-            if h is None:
-                return None
-            if isinstance(h, tuple):  # LSTM
-                return tuple(v.index_select(1, idx) for v in h)
-            return h.index_select(1, idx)
+        # ==== 3. Stacked RNN ====
+        assert x.data.shape[-1] == self.rnn_model.input_size, \
+            "Expecting input to RNN layer to be of size {}. Got {}" \
+            .format(self.rnn_model.input_size, x.data.shape[-1])
 
         if self.predict_bundle_ids:
-            if self.context != "tracking":
-                x_raw = x
+            x, out_hidden_recurrent_states, bundle_logits_per_point = \
+                self.rnn_model(x, hidden_recurrent_states)
 
-                # First pass
-                x_first = x_raw
-                if self.use_bundle_ids and \
-                x_raw.data.shape[-1] == self.rnn_model.input_size - self.bundle_emb_dim:
-                    x_raw_seq = faster_unpack_sequence(x_raw)
-
-                    x_first_seq = []
-                    for seq in x_raw_seq:
-                        zero_seq = torch.zeros(
-                            seq.shape[0],
-                            self.bundle_emb_dim,
-                            device=seq.device,
-                            dtype=seq.dtype
-                        )
-                        x_first_seq.append(torch.cat((seq, zero_seq), dim=-1))
-
-                    x_first = pack_sequence(x_first_seq)
-
-                x, out_hidden_recurrent_states, bundle_logits_per_point = \
-                    self.rnn_model(x_first, hidden_recurrent_states)
-
-                final_ref = x_first
-
-                # Per-line bundle logits
-                bl = PackedSequence(
-                    bundle_logits_per_point,
-                    x_first.batch_sizes,
-                    x_first.sorted_indices,
-                    x_first.unsorted_indices
-                )
-                bl_list = faster_unpack_sequence(bl)
-                bundle_logits_per_line = torch.vstack([t[-1] for t in bl_list])
-                batch_pred = torch.argmax(bundle_logits_per_line, dim=1)
-
-                # Second pass on correctly predicted streamlines
-                good_indices_sorted = torch.where(batch_pred == bundle_ids)[0]
-                if bundle_ids is not None and good_indices_sorted.numel() != 0:
-                    
-                    
-                    # Store ORIGINAL indices for run_one_batch / targets filtering
-                    if sorted_indices is not None:
-                        self.good_indices = sorted_indices.to(good_indices_sorted.device)[good_indices_sorted]
-                    else:
-                        self.good_indices = good_indices_sorted
-                        
-                    if self.use_bundle_ids :
-                        x_raw_seq = faster_unpack_sequence(x_raw)
-                        x_raw_seq = [x_raw_seq[i] for i in good_indices_sorted.tolist()]
-
-                        bundle_ids_good = bundle_ids[good_indices_sorted]
-                        b = self.bundle_emb(bundle_ids_good)
-
-                        x_second_seq = []
-                        for i, seq in enumerate(x_raw_seq):
-                            b_seq = b[i].expand(seq.shape[0], -1)
-                            x_second_seq.append(torch.cat((seq, b_seq), dim=-1))
-
-                        x_second = pack_sequence(x_second_seq)
-                        hidden_second = _filter_hidden(hidden_recurrent_states, good_indices_sorted)
-
-                        x, out_hidden_recurrent_states, bundle_logits_per_point = \
-                            self.rnn_model(x_second, hidden_second)
-
-                        final_ref = x_second
-                else:
-                    if self.use_bundle_ids and x_raw.data.shape[-1] == self.rnn_model.input_size - self.bundle_emb_dim:
-                        zero_bundle = torch.zeros(
-                            x_raw.data.shape[0],
-                            self.bundle_emb_dim,
-                            device=x_raw.data.device,
-                            dtype=x_raw.data.dtype
-                        )
-                        x_raw = PackedSequence(
-                            torch.cat((x_raw.data, zero_bundle), dim=-1),
-                            x_raw.batch_sizes,
-                            x_raw.sorted_indices,
-                            x_raw.unsorted_indices
-                        )
-
-                    x, out_hidden_recurrent_states, bundle_logits_per_line = self.rnn_model(
-                        x_raw, hidden_recurrent_states
-                    )
-                    final_ref = x_raw
-                    self.good_indices = torch.arange(len(bundle_ids), device=bundle_ids.device)
-
-            else:
-                if self.use_bundle_ids and x.data.shape[-1] == self.rnn_model.input_size - self.bundle_emb_dim:
-                    zero_bundle = torch.zeros(
-                        x.data.shape[0],
-                        self.bundle_emb_dim,
-                        device=x.data.device,
-                        dtype=x.data.dtype
-                    )
-                    x = PackedSequence(
-                        torch.cat((x.data, zero_bundle), dim=-1),
-                        x.batch_sizes,
-                        x.sorted_indices,
-                        x.unsorted_indices
-                    )
-
-                x, out_hidden_recurrent_states, bundle_logits_per_point = self.rnn_model(x, hidden_recurrent_states)
-                bundle_logits_per_line = bundle_logits_per_point
-                final_ref = x
-
+            # Bundle logits per streamline = last point
+            bl = PackedSequence(bundle_logits_per_point, batch_sizes)
+            bl_list = faster_unpack_sequence(bl)  # list[Li, num_bundles]
+            if unsorted_indices is not None:
+                bl_list = [bl_list[i] for i in unsorted_indices]
+            bundle_logits_per_line = torch.vstack([t[-1] for t in bl_list])
         else:
-            x, out_hidden_recurrent_states = self.rnn_model(x, hidden_recurrent_states)
+            x, out_hidden_recurrent_states = self.rnn_model(
+                x, hidden_recurrent_states)
             bundle_logits_per_line = None
-            final_ref = x
 
-        # -------------------------
-        # Direction getter
-        # -------------------------
         logger.debug("*** 5. Direction getter....")
-
+        # direction getter can't get a list of sequences.
         assert x.data.shape[-1] == self.direction_getter.input_size, \
             "Expecting input to direction getter to be of size {}. Got {}" \
             .format(self.direction_getter.input_size, x.data.shape[-1])
-
+        
         x = self.direction_getter(x)
 
-        # -------------------------
-        # Unpack outputs
-        # -------------------------
-        if self.context != 'tracking':
+        # Unpacking.
+        if not self.context == 'tracking':
+            # During tracking: keep as one single tensor.
             if 'gaussian' in self.dg_key or 'fisher' in self.dg_key:
+                # Separating mean, sigmas (gaussian) or mean, kappa (fisher)
                 x, x2 = x
 
-                x2 = PackedSequence(
-                    x2,
-                    final_ref.batch_sizes,
-                    final_ref.sorted_indices,
-                    final_ref.unsorted_indices
-                )
+                x2 = PackedSequence(x2, batch_sizes)
                 x2 = faster_unpack_sequence(x2)
+                x2 = [x2[i] for i in unsorted_indices]
 
-            x = PackedSequence(
-                x,
-                final_ref.batch_sizes,
-                final_ref.sorted_indices,
-                final_ref.unsorted_indices
-            )
+            x = PackedSequence(x, batch_sizes)
             x = faster_unpack_sequence(x)
+            x = [x[i] for i in unsorted_indices]
 
             if 'gaussian' in self.dg_key or 'fisher' in self.dg_key:
                 x = (x, x2)
 
-        # -------------------------
-        # Hidden states
-        # -------------------------
-        if not return_hidden:
+        if return_hidden:
+            # Return the hidden states too. Necessary for the generative
+            # (tracking) part, done step by step.
+            if  not self.context == 'tracking':
+                # Must also re-sort hidden states.
+                if self.rnn_model.rnn_torch_key == 'lstm':
+                    # LSTM: For each layer, states are tuples; (h_t, C_t)
+                    out_hidden_recurrent_states = [
+                        (layer_states[0][:, unsorted_indices, :],
+                         layer_states[1][:, unsorted_indices, :])
+                        for layer_states in out_hidden_recurrent_states
+                    ]
+                else:
+                    # GRU: For each layer, states are tensors; h_t.
+                    out_hidden_recurrent_states = [
+                        layer_states[:, unsorted_indices, :]
+                        for layer_states in out_hidden_recurrent_states
+                    ]
+
+        else:
             out_hidden_recurrent_states = None
         
         return x, out_hidden_recurrent_states, bundle_logits_per_line
-    
-    
+
     def take_lines_in_hidden_state(self, hidden_states, lines_to_keep):
         """
         Utilitary method to remove a few streamlines from the hidden
