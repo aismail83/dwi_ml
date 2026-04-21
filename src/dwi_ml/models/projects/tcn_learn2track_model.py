@@ -275,7 +275,7 @@ class TCNLearn2TrackModel(
         if self.nb_previous_dirs > 0:
             self.input_size += self.prev_dirs_embedded_size
 
-        self.dilations = (1, 3, 6, 12, 24)
+        self.dilations = (1, 3, 6, 12)
 
         # -------------------------
         # BLOCK 
@@ -289,7 +289,7 @@ class TCNLearn2TrackModel(
         )
 
 
-        self.context_len = 1 + (tcn_kernel_size - 1) * sum(self.dilations)
+        self.context_len = 1 + (tcn_kernel_size) * len(self.dilations)
 
         
         # Direction getter uses Block  output
@@ -398,7 +398,7 @@ class TCNLearn2TrackModel(
         # -----------------------------------
         # Pack input
         # -----------------------------------
-        x_packed = pack_sequence(x, enforce_sorted=False)
+        x_packed = pack_sequence(x)
         batch_sizes = x_packed.batch_sizes
         x_data = x_packed.data
 
