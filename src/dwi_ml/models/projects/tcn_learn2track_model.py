@@ -275,7 +275,7 @@ class TCNLearn2TrackModel(
         if self.nb_previous_dirs > 0:
             self.input_size += self.prev_dirs_embedded_size
 
-        self.dilations = (1, 3, 6, 12)
+        self.dilations = (1, 3, 6, 12,24,48)
 
         # -------------------------
         # BLOCK 
