@@ -427,7 +427,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
 
                 # Second pass on correctly predicted streamlines
                 good_indices_sorted = torch.where(batch_pred == bundle_ids)[0]
-                if bundle_ids is not None and good_indices_sorted.numel() != 0:
+                if bundle_ids is not None and good_indices_sorted.numel() > 0:
                     
                     
                     # Store ORIGINAL indices for run_one_batch / targets filtering
@@ -474,7 +474,7 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
                         x_raw, hidden_recurrent_states
                     )
                     final_ref = x_raw
-                    self.good_indices = torch.arange(len(bundle_ids), device=bundle_ids.device)
+		    self.good_indices = torch.empty(0, dtype=torch.long, device=bundle_ids.device)
 
             else:
                 if self.use_bundle_ids and x.data.shape[-1] == self.rnn_model.input_size - self.bundle_emb_dim:
@@ -540,12 +540,48 @@ class Learn2TrackModel(ModelWithPreviousDirections, ModelWithDirectionGetter,
         # -------------------------
         # Hidden states
         # -------------------------
-        if not return_hidden:
+        if return_hidden:
+            # Return the hidden states too. Necessary for the generative
+            # (tracking) part, done step by step.
+            if  not self.context == 'tracking':
+                # Must also re-sort hidden states.
+                if self.rnn_model.rnn_torch_key == 'lstm':
+                    # LSTM: For each layer, states are tuples; (h_t, C_t)
+                    out_hidden_recurrent_states = [
+                        (layer_states[0][:, unsorted_indices, :],
+                         layer_states[1][:, unsorted_indices, :])
+                        for layer_states in out_hidden_recurrent_states
+                    ]
+                else:
+                    # GRU: For each layer, states are tensors; h_t.
+                    out_hidden_recurrent_states = [
+                        layer_states[:, unsorted_indices, :]
+                        for layer_states in out_hidden_recurrent_states
+                    ]
+
+        else:
             out_hidden_recurrent_states = None
-        
+
+        print("self.good_indices:",
+              None if self.good_indices is None else self.good_indices.shape)
+
+        if 'x_raw_seq' in locals():
+            print("len x_raw_seq:", len(x_raw_seq))
+        else:
+            print("len x_raw_seq: <undefined>")
+
+        if 'good_indices_sorted' in locals():
+            print("good_indices_sorted:", good_indices_sorted.shape)
+        else:
+            print("good_indices_sorted: <undefined>")
+
+        if 'bundle_ids_good' in locals():
+            print("bundle_ids_good:", bundle_ids_good.shape)
+        else:
+            print("bundle_ids_good: <undefined>")
+
         return x, out_hidden_recurrent_states, bundle_logits_per_line
-    
-    
+
     def take_lines_in_hidden_state(self, hidden_states, lines_to_keep):
         """
         Utilitary method to remove a few streamlines from the hidden
